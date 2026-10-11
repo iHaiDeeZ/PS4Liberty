@@ -794,3 +794,7 @@ CMakeUserPresets.json
 !/tools/tests/test_metal_shader_archive.py
 !/tools/vulkan/*.py
 !/glue/rexglue-sdk-main/cmake/fidelityfx_shader_compiler.py
+
+# PS4 port build and packaging scripts
+!ps4/scripts/
+!ps4/scripts/**
