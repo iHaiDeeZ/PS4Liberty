@@ -66,6 +66,11 @@ bool SDLWindowedAppContext::Initialize() {
   // The Linux surface type the presenters consume is XcbWindow, so force X11
   // and keep SDL off Wayland where no surface shim exists yet.
   SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11");
+#elif REX_PLATFORM_PS4
+  // SDL has no PS4 display driver. Its offscreen driver provides the window
+  // and event loop the UI runs on; frames are presented through VideoOut
+  // (ui/vulkan/vulkan_wsi_ps4.cpp) and input comes from the scePad driver.
+  SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
 #endif
   if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
     REXLOG_ERROR("SDL_InitSubSystem(SDL_INIT_VIDEO) failed: {}", SDL_GetError());

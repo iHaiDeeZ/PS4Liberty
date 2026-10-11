@@ -23,6 +23,8 @@
 #include <rex/input/nop/nop_input_driver.h>
 #if REX_PLATFORM_NX
 #include "switch/switch_input_driver.h"
+#elif REX_PLATFORM_PS4
+#include "ps4/ps4_input_driver.h"
 #else
 #include <rex/input/sdl/sdl_input_driver.h>
 #include <rex/input/xinput/xinput_input_driver.h>
@@ -356,6 +358,9 @@ std::unique_ptr<InputSystem> CreateDefaultInputSystem(bool tool_mode) {
 #if REX_PLATFORM_NX
     auto switch_driver = std::make_unique<nx::SwitchInputDriver>(nullptr, 0);
     if (switch_driver->Setup() == X_STATUS_SUCCESS) input->AddDriver(std::move(switch_driver));
+#elif REX_PLATFORM_PS4
+    auto ps4_driver = std::make_unique<ps4::PS4InputDriver>(nullptr, 0);
+    if (ps4_driver->Setup() == X_STATUS_SUCCESS) input->AddDriver(std::move(ps4_driver));
 #else
     const bool expose_sdl_gamepad_state = REXCVAR_GET(input_backend) == "sdl";
     auto sdl_driver = std::make_unique<sdl::SDLInputDriver>(nullptr, 0, expose_sdl_gamepad_state);

@@ -55,6 +55,10 @@
 #if REX_PLATFORM_MAC
 #include <rex/ui/surface_mac.h>
 #endif
+#if REX_PLATFORM_PS4
+#include <rex/ui/surface_ps4.h>
+#include "vulkan_wsi_ps4.h"
+#endif
 
 REXCVAR_DEFINE_BOOL(present_render_pass_clear, true, "UI/Presenter",
                     "Clear render pass during presentation");
@@ -367,6 +371,10 @@ Surface::TypeFlags VulkanPresenter::GetSurfaceTypesSupportedByInstance(
   if (instance_extensions.ext_EXT_metal_surface) {
     type_flags |= Surface::kTypeFlag_CAMetalLayer;
   }
+#endif
+#if REX_PLATFORM_PS4
+  // VK_KHR_surface is provided by vulkan_wsi_ps4 on top of VideoOut.
+  type_flags |= Surface::kTypeFlag_PS4VideoOut;
 #endif
   return type_flags;
 }
@@ -820,6 +828,12 @@ VulkanPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_su
         surface_create_info.pLayer = metal_surface.layer();
         vulkan_surface_create_result = ifn.vkCreateMetalSurfaceEXT(
             instance, &surface_create_info, nullptr, &paint_context_.vulkan_surface);
+      } break;
+#endif
+#if REX_PLATFORM_PS4
+      case Surface::kTypeIndex_PS4VideoOut: {
+        vulkan_surface_create_result =
+            ps4_wsi::CreateVideoOutSurface(&paint_context_.vulkan_surface);
       } break;
 #endif
       default:

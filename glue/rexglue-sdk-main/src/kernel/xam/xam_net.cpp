@@ -22,7 +22,9 @@
 #include <ranges>
 #include <vector>
 
-#if REX_PLATFORM_MAC
+#include <rex/platform.h>
+
+#if REX_PLATFORM_MAC || REX_PLATFORM_PS4
 #include <sys/select.h>
 #endif
 
@@ -50,7 +52,7 @@
 #define _WINSOCK_DEPRECATED_NO_WARNINGS  // inet_addr
 #include <winsock2.h>                    // NOLINT(build/include_order)
 #include <ws2tcpip.h>
-#elif REX_PLATFORM_LINUX || REX_PLATFORM_MAC
+#elif REX_PLATFORM_LINUX || REX_PLATFORM_MAC || REX_PLATFORM_PS4
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <netinet/in.h>

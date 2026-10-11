@@ -31,6 +31,14 @@ if(APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND
     set(LIBERTY_RECOMP_GRAINE_MAC ON)
 endif()
 
+# PS4 also builds the Graine RexGlue consumer (glue/rexglue-sdk-main/
+# gta4-recomp). The pre-Graine LibertyRecomp/ application no longer builds
+# against the current SDK.
+set(LIBERTY_RECOMP_GRAINE_PS4 OFF)
+if(LIBERTY_RECOMP_TARGET_PLATFORM STREQUAL "ps4")
+    set(LIBERTY_RECOMP_GRAINE_PS4 ON)
+endif()
+
 if(LIBERTY_RECOMP_GRAINE_MAC)
     include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/CheckMacOSToolchain.cmake")
 endif()
@@ -164,7 +172,9 @@ endif()
 string(TOLOWER "${LIBERTY_RECOMP_ARCHITECTURE}" LIBERTY_RECOMP_ARCHITECTURE)
 message(STATUS "Detected architecture: ${LIBERTY_RECOMP_ARCHITECTURE}")
 
-if (LIBERTY_RECOMP_ARCHITECTURE STREQUAL "x86_64" OR LIBERTY_RECOMP_ARCHITECTURE STREQUAL "amd64")
+if (LIBERTY_RECOMP_GRAINE_PS4)
+    # The PS4 CPU target (-march=btver2) comes from toolchains/ps4-openorbis.cmake.
+elseif (LIBERTY_RECOMP_ARCHITECTURE STREQUAL "x86_64" OR LIBERTY_RECOMP_ARCHITECTURE STREQUAL "amd64")
     # Target Sandy Bridge for all projects
     add_compile_options(
         -march=sandybridge
@@ -184,6 +194,18 @@ if(LIBERTY_RECOMP_GRAINE_MAC)
     endif()
 
     message(STATUS "macOS: building the pure Graine RexGlue consumer")
+    add_subdirectory("glue")
+    return()
+endif()
+
+if(LIBERTY_RECOMP_GRAINE_PS4)
+    if(NOT USE_REXGLUE_RUNTIME)
+        message(FATAL_ERROR "The PS4 build requires the Graine RexGlue runtime")
+    endif()
+
+    message(STATUS "PS4: building the pure Graine RexGlue consumer")
+    # Patched link script, crt1 replacement, app heap, Mesa RADV, eboot.bin.
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/PS4Runtime.cmake")
     add_subdirectory("glue")
     return()
 endif()

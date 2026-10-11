@@ -4,6 +4,9 @@
 
 ---
 
+> [!NOTE]
+> **PS4Liberty:** this fork adds an experimental, now discontinued PS4 port (GoldHEN, OpenOrbis, Mesa RADV), about 5-6 fps in gameplay. See [ps4/README.md](ps4/README.md) and [ps4/CREDITS.md](ps4/CREDITS.md).
+
 > [!CAUTION]
 > This recompilation is in early development and is NOT meant for public use. This is a work-in-progress fork based on the MarathonRecomp framework.
 

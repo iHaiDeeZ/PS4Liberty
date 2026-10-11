@@ -52,7 +52,14 @@ set(REXSYSTEM_SOURCES
     xex_module.cpp
 )
 
-add_library(rexruntime SHARED ${REXSYSTEM_SOURCES})
+# PS4 homebrew can only load Sony-signed .sprx modules, so the runtime is
+# linked statically into the eboot there.
+if(PS4)
+    set(REXRUNTIME_LIBRARY_TYPE STATIC)
+else()
+    set(REXRUNTIME_LIBRARY_TYPE SHARED)
+endif()
+add_library(rexruntime ${REXRUNTIME_LIBRARY_TYPE} ${REXSYSTEM_SOURCES})
 add_library(rex::runtime ALIAS rexruntime)
 add_library(rex::system ALIAS rexruntime)
 add_library(rex::kernel ALIAS rexruntime)

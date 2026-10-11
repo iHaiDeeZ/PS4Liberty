@@ -1,21 +1,10 @@
-/* musl-compatible ucontext implementation for PS4 (x86_64)
+/* ucontext implementation for PS4 (x86_64)
  *
  * The PS4 (OpenOrbis SDK) ships musl headers with ucontext_t declarations
  * but does NOT include the implementation in libc.a.  This file provides
  * getcontext, setcontext, swapcontext, and makecontext as plain C with
- * inline assembly, matching musl's x86_64 gregset layout.
- *
- * gregset indices (from bits/signal.h):
- *   R8=0  R9=1  R10=2 R11=3 R12=4 R13=5 R14=6 R15=7
- *   RDI=8 RSI=9 RBP=10 RBX=11 RDX=12 RAX=13 RCX=14
- *   RSP=15 RIP=16 EFL=17
- *
- * ucontext_t offsets (x86_64 LP64):
- *   uc_flags     =  0   (unsigned long)
- *   uc_link      =  8   (ucontext_t*)
- *   uc_stack     = 16   { ss_sp=16, ss_flags=24, ss_size=32 }
- *   uc_mcontext  = 40   { gregs[23], fpregs, __reserved[8] }
- *   gregs[N]     = 40 + N*8
+ * inline assembly. Register slot offsets are computed with offsetof() from
+ * whichever ucontext_t layout the headers declare (see the OFF_* table).
  */
 
 #include <stdarg.h>
@@ -28,28 +17,60 @@
 #include <signal.h>
 #include <ucontext.h>
 
-/* Offsets into ucontext_t for the gregs we care about. */
-#define GREGS_BASE  40  /* offsetof(ucontext_t, uc_mcontext.gregs) */
-#define OFF(reg)    (GREGS_BASE + (reg) * 8)
+/* Offsets into ucontext_t for the registers we save, taken from whichever
+ * mcontext layout the headers declare:
+ *   - musl's Linux-style gregs[] array (stock OpenOrbis bits/signal.h, which
+ *     defines the REG_* index macros), or
+ *   - the FreeBSD/amd64 struct __mcontext with mc_* fields, which is what the
+ *     PS4 kernel actually writes into signal handler contexts (provided by a
+ *     libc overlay such as DolphinPS4's).
+ * Only these get/set/swap/makecontext functions interpret the saved registers
+ * for fibers, so either layout works as long as every translation unit sees
+ * the same ucontext_t. */
+#ifdef REG_RIP
+#define GREG_OFF(idx) (offsetof(ucontext_t, uc_mcontext.gregs) + (idx) * 8)
+#define OFF_R8   GREG_OFF(REG_R8)
+#define OFF_R9   GREG_OFF(REG_R9)
+#define OFF_R10  GREG_OFF(REG_R10)
+#define OFF_R11  GREG_OFF(REG_R11)
+#define OFF_R12  GREG_OFF(REG_R12)
+#define OFF_R13  GREG_OFF(REG_R13)
+#define OFF_R14  GREG_OFF(REG_R14)
+#define OFF_R15  GREG_OFF(REG_R15)
+#define OFF_RDI  GREG_OFF(REG_RDI)
+#define OFF_RSI  GREG_OFF(REG_RSI)
+#define OFF_RBP  GREG_OFF(REG_RBP)
+#define OFF_RBX  GREG_OFF(REG_RBX)
+#define OFF_RDX  GREG_OFF(REG_RDX)
+#define OFF_RAX  GREG_OFF(REG_RAX)
+#define OFF_RCX  GREG_OFF(REG_RCX)
+#define OFF_RSP  GREG_OFF(REG_RSP)
+#define OFF_RIP  GREG_OFF(REG_RIP)
+#define OFF_EFL  GREG_OFF(REG_EFL)
+#else
+#define MC_OFF(field) offsetof(ucontext_t, uc_mcontext.field)
+#define OFF_R8   MC_OFF(mc_r8)
+#define OFF_R9   MC_OFF(mc_r9)
+#define OFF_R10  MC_OFF(mc_r10)
+#define OFF_R11  MC_OFF(mc_r11)
+#define OFF_R12  MC_OFF(mc_r12)
+#define OFF_R13  MC_OFF(mc_r13)
+#define OFF_R14  MC_OFF(mc_r14)
+#define OFF_R15  MC_OFF(mc_r15)
+#define OFF_RDI  MC_OFF(mc_rdi)
+#define OFF_RSI  MC_OFF(mc_rsi)
+#define OFF_RBP  MC_OFF(mc_rbp)
+#define OFF_RBX  MC_OFF(mc_rbx)
+#define OFF_RDX  MC_OFF(mc_rdx)
+#define OFF_RAX  MC_OFF(mc_rax)
+#define OFF_RCX  MC_OFF(mc_rcx)
+#define OFF_RSP  MC_OFF(mc_rsp)
+#define OFF_RIP  MC_OFF(mc_rip)
+#define OFF_EFL  MC_OFF(mc_rflags)
+#endif
 
-#define OFF_R8   OFF(0)
-#define OFF_R9   OFF(1)
-#define OFF_R10  OFF(2)
-#define OFF_R11  OFF(3)
-#define OFF_R12  OFF(4)
-#define OFF_R13  OFF(5)
-#define OFF_R14  OFF(6)
-#define OFF_R15  OFF(7)
-#define OFF_RDI  OFF(8)
-#define OFF_RSI  OFF(9)
-#define OFF_RBP  OFF(10)
-#define OFF_RBX  OFF(11)
-#define OFF_RDX  OFF(12)
-#define OFF_RAX  OFF(13)
-#define OFF_RCX  OFF(14)
-#define OFF_RSP  OFF(15)
-#define OFF_RIP  OFF(16)
-#define OFF_EFL  OFF(17)
+/* Store a register value into a ucontext by byte offset. */
+#define UC_REG(ucp, off) (*(long *)((char *)(ucp) + (off)))
 
 /* ========================================================================= */
 /* getcontext                                                                 */
@@ -240,7 +261,7 @@ void rex_fpu_restore(const void *buf16) {
  * setcontext(uc_link) if it exists, or _exit(0) otherwise. */
 static void __makecontext_return(void) {
     /* At this point RBX still holds the ucontext_t* we stashed in
-     * makecontext().  uc_link is at offset 8. */
+     * makecontext(). */
     ucontext_t *uc;
     __asm__ volatile ("movq %%rbx, %0" : "=r"(uc));
 
@@ -254,7 +275,6 @@ static void __makecontext_return(void) {
 
 void makecontext(ucontext_t *ucp, void (*func)(), int argc, ...) {
     va_list ap;
-    long *gregs = (long *)&ucp->uc_mcontext.gregs;
 
     /* Stack grows downward. Compute the top of the stack. */
     unsigned long sp = (unsigned long)ucp->uc_stack.ss_sp + ucp->uc_stack.ss_size;
@@ -278,22 +298,21 @@ void makecontext(ucontext_t *ucp, void (*func)(), int argc, ...) {
     }
 
     /* Set RIP = func, RSP = sp, RBP = 0 (end of call chain) */
-    gregs[16] = (long)(uintptr_t)func;  /* RIP */
-    gregs[15] = (long)sp;               /* RSP */
-    gregs[10] = 0;                      /* RBP */
+    UC_REG(ucp, OFF_RIP) = (long)(uintptr_t)func;
+    UC_REG(ucp, OFF_RSP) = (long)sp;
+    UC_REG(ucp, OFF_RBP) = 0;   /* end of call chain */
 
     /* Stash a pointer to the ucontext in RBX (callee-saved) so the
      * return trampoline can find uc_link. */
-    gregs[11] = (long)(uintptr_t)ucp;   /* RBX */
+    UC_REG(ucp, OFF_RBX) = (long)(uintptr_t)ucp;
 
     /* Distribute variadic integer arguments to registers and stack. */
     va_start(ap, argc);
-    /* Register order: RDI, RSI, RDX, RCX, R8, R9 */
-    /* gregset indices:  8,   9,  12,  14,  0,  1  */
-    static const int reg_order[] = { 8, 9, 12, 14, 0, 1 };
+    /* SysV integer argument registers, in order. */
+    static const size_t reg_order[] = { OFF_RDI, OFF_RSI, OFF_RDX, OFF_RCX, OFF_R8, OFF_R9 };
 
     for (int i = 0; i < argc && i < 6; i++) {
-        gregs[reg_order[i]] = va_arg(ap, long);
+        UC_REG(ucp, reg_order[i]) = va_arg(ap, long);
     }
 
     /* Extra args go on the stack (above the return address) */

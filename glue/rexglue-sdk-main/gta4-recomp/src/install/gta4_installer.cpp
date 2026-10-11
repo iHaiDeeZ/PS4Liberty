@@ -415,7 +415,7 @@ bool CheckedAdd(uint64_t value, uint64_t& total) {
 
 std::optional<std::filesystem::path> FindRpfAesKey() {
   const std::array candidates = {
-      rex::filesystem::GetExecutableFolder().parent_path() / "Resources" / "aes_key.bin",
+      rex::filesystem::GetResourcesFolder() / "aes_key.bin",
       std::filesystem::path(GTA4_RPF_AES_KEY_SOURCE),
   };
   for (const auto& candidate : candidates) {

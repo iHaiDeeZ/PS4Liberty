@@ -25,6 +25,13 @@
 #include <new>
 #include <span>
 
+#include <rex/platform.h>
+#if REX_PLATFORM_PS4
+#include <chrono>
+// Activity counters (os/ps4/runtime/ps4_stackdump.cpp): 2 bytes read, 3 read time us.
+extern "C" __attribute__((weak)) void ps4_stat_add(int id, uint64_t value);
+#endif
+
 namespace rex::system {
 
 XFile::XFile(KernelState* kernel_state, rex::filesystem::File* file, bool synchronous)
@@ -204,7 +211,24 @@ X_STATUS XFile::SnapshotReadScatter(uint32_t segments_guest_address, uint32_t le
 X_STATUS XFile::ReadTransfer(uint32_t buffer_guest_address, uint32_t buffer_length,
                              uint64_t byte_offset, uint32_t* out_bytes_read) {
   std::lock_guard<std::mutex> lock(file_lock_);
+#if REX_PLATFORM_PS4
+  const auto read_start = std::chrono::steady_clock::now();
+  uint32_t bytes_read = 0;
+  const X_STATUS read_result =
+      ReadInternalLocked(buffer_guest_address, buffer_length, byte_offset, &bytes_read);
+  if (out_bytes_read) {
+    *out_bytes_read = bytes_read;
+  }
+  if (ps4_stat_add) {
+    ps4_stat_add(2, bytes_read);
+    ps4_stat_add(3, uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+                                 std::chrono::steady_clock::now() - read_start)
+                                 .count()));
+  }
+  return read_result;
+#else
   return ReadInternalLocked(buffer_guest_address, buffer_length, byte_offset, out_bytes_read);
+#endif
 }
 
 X_STATUS XFile::ReadInternalLocked(uint32_t buffer_guest_address, uint32_t buffer_length,

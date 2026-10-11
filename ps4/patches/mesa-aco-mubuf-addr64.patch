@@ -1,0 +1,69 @@
+--- dolphinps4-build/src/mesa/src/amd/compiler/instruction_selection/aco_select_nir_intrinsics.cpp	2026-10-02 12:55:00.805814606 +0300
++++ cemups4-build/src/mesa/src/amd/compiler/instruction_selection/aco_select_nir_intrinsics.cpp	2026-10-11 03:43:37.900460976 +0300
+@@ -806,6 +806,21 @@
+ const EmitLoadParameters scratch_mubuf_load_params{mubuf_load_callback, 4095};
+ const EmitLoadParameters scratch_flat_load_params{scratch_load_callback, 2047};
+ 
++/* PS4 (AI-assisted, PCSX2 PS4 port): GFX7 global memory (buffer device addresses) through MUBUF with addr64, as on
++ * GFX6, instead of FLAT. A FLAT address is global memory only outside the LDS and scratch apertures (SH_MEM_BASES),
++ * which the Orbis kernel sets up for its own GNM shaders, not for RADV's addresses: paraLLEl-GS's first FLAT store hung
++ * the GPU. MUBUF addr64 needs no aperture (it is how LLVM reached global memory on CIK under Mesa). Needs proper
++ * testing. */
++static inline bool
++mubuf_addr64_global(amd_gfx_level gfx_level)
++{
++#if defined(__PS4__)
++   return gfx_level <= GFX7;
++#else
++   return gfx_level == GFX6;
++#endif
++}
++
+ Temp
+ get_mubuf_global_rsrc(Builder& bld, Temp addr)
+ {
+@@ -844,7 +859,7 @@
+    Format format = Format::MUBUF;
+    if (bld.program->gfx_level >= GFX9)
+       format = Format::GLOBAL;
+-   else if (bld.program->gfx_level >= GFX7 && address.type() == RegType::vgpr)
++   else if (!mubuf_addr64_global(bld.program->gfx_level) && address.type() == RegType::vgpr)
+       format = Format::FLAT;
+ 
+    uint64_t max_const_offset_plus_one =
+@@ -875,7 +890,7 @@
+       if (offset.id() &&
+           (address.type() == RegType::vgpr ? offset.type() != RegType::sgpr
+                                            : add_might_overflow(ctx, offset_src, const_offset))) {
+-         if (offset.type() == RegType::vgpr && bld.program->gfx_level > GFX6) {
++         if (offset.type() == RegType::vgpr && !mubuf_addr64_global(bld.program->gfx_level)) {
+             assert(address.type() == RegType::sgpr);
+             address = add64_const64(bld, address, const_offset);
+             const_offset = 0;
+@@ -962,7 +977,7 @@
+    RegClass rc = RegClass::get(RegType::vgpr, bytes_size);
+    Temp val = rc == info.dst.regClass() ? info.dst : bld.tmp(rc);
+    if (use_mubuf) {
+-      assert(bld.program->gfx_level == GFX6 || addr.type() != RegType::vgpr);
++      assert(mubuf_addr64_global(bld.program->gfx_level) || addr.type() != RegType::vgpr);
+ 
+       aco_ptr<Instruction> mubuf{
+          create_instruction(op, Format::MUBUF, 3 + 2 * info.disable_wqm, 1)};
+@@ -2511,7 +2526,7 @@
+          init_disable_wqm(bld, flat->flatlike(), true);
+          ctx->block->instructions.emplace_back(std::move(flat));
+       } else {
+-         assert(ctx->options->gfx_level == GFX6 || write_address.type() != RegType::vgpr);
++         assert(mubuf_addr64_global(ctx->options->gfx_level) || write_address.type() != RegType::vgpr);
+ 
+          aco_opcode op = get_buffer_store_op(write_datas[i].bytes());
+ 
+@@ -2654,7 +2669,7 @@
+       init_disable_wqm(bld, flat->flatlike(), true);
+       ctx->block->instructions.emplace_back(std::move(flat));
+    } else {
+-      assert(ctx->options->gfx_level == GFX6 || addr.type() != RegType::vgpr);
++      assert(mubuf_addr64_global(ctx->options->gfx_level) || addr.type() != RegType::vgpr);
+ 
+       UNUSED aco_opcode image_op;
+       translate_buffer_image_atomic_op(nir_op, &op32, &op64, &image_op);

@@ -26,6 +26,10 @@
 
 #include "graphics/gta4_native/temporal/dlss_bootstrap.h"
 
+#if REX_PLATFORM_PS4
+#include "vulkan_wsi_ps4.h"
+#endif
+
 REXCVAR_DEFINE_BOOL(vulkan_native_queue_separation, true, "UI/Vulkan",
                     "Isolate native offscreen work from drawable-dependent presentation")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
@@ -361,6 +365,13 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
   check_dlss_extensions(dlss_fg_requirements, device->dlss_fg_extensions_enabled_,
                          device->dlss_fg_unavailable_reason_);
 
+#if REX_PLATFORM_PS4
+  // VK_KHR_swapchain comes from vulkan_wsi_ps4 (VideoOut), not from RADV, so it
+  // is not in the enabled extension list.
+  if (with_swapchain) {
+    device->extensions_.ext_KHR_swapchain = true;
+  }
+#endif
   if (with_swapchain && !device->extensions_.ext_KHR_swapchain) {
     REXLOG_WARN("Vulkan device '{}' doesn't support swapchains", properties.deviceName);
     return nullptr;
@@ -1013,9 +1024,11 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
 #include <rex/ui/vulkan/functions/device_1_3_khr_maintenance4.inc>
     }
   }
+#if !REX_PLATFORM_PS4
   if (device->extensions_.ext_KHR_swapchain) {
 #include <rex/ui/vulkan/functions/device_khr_swapchain.inc>
   }
+#endif
 #undef XE_UI_VULKAN_FUNCTION_PROMOTED
 
 #undef XE_UI_VULKAN_FUNCTION
@@ -1036,6 +1049,11 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
                  properties.deviceName);
     return nullptr;
   }
+#if REX_PLATFORM_PS4
+  if (device->extensions_.ext_KHR_swapchain) {
+    ps4_wsi::InstallDeviceFunctions(*device, dfn);
+  }
+#endif
 
   // Get the queues.
 

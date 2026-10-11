@@ -15,7 +15,9 @@
 #include <disruptorplus/multi_threaded_claim_strategy.hpp>
 #include <disruptorplus/ring_buffer.hpp>
 #include <disruptorplus/sequence_barrier.hpp>
+#include <disruptorplus/blocking_wait_strategy.hpp>
 #include <disruptorplus/spin_wait_strategy.hpp>
+#include <rex/platform.h>
 
 #include <rex/assert.h>
 #include <rex/thread.h>
@@ -142,9 +144,16 @@ class TimerQueue {
   // This ring buffer will be used to introduce timers queued by the public API
   static constexpr size_t kWaitCount = 512;
   dp::ring_buffer<std::shared_ptr<WaitItem>> buffer_;
-  dp::spin_wait_strategy wait_strategy_;
-  dp::multi_threaded_claim_strategy<dp::spin_wait_strategy> claim_strategy_;
-  dp::sequence_barrier<dp::spin_wait_strategy> consumed_;
+  // PS4: the spinning wait kept the dispatch thread at ~26% of a core with nothing to do (the
+  // PS4's few, slow cores are what limits the frame rate); block on a condition variable.
+#if REX_PLATFORM_PS4
+  using WaitStrategy = dp::blocking_wait_strategy;
+#else
+  using WaitStrategy = dp::spin_wait_strategy;
+#endif
+  WaitStrategy wait_strategy_;
+  dp::multi_threaded_claim_strategy<WaitStrategy> claim_strategy_;
+  dp::sequence_barrier<WaitStrategy> consumed_;
 
   // This is a _sorted_ (ascending due_) list of active timers managed by a
   // dedicated thread

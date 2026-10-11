@@ -16,6 +16,14 @@ add_library(rexaudio OBJECT
 )
 add_library(rex::audio ALIAS rexaudio)
 
+if(PS4)
+    # sceAudioOut backend; LibertyRecomp's main.cpp selects it on PS4.
+    target_sources(rexaudio PRIVATE
+        orbis/orbis_audio_system.cpp
+        orbis/orbis_audio_driver.cpp
+    )
+endif()
+
 if(APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     target_sources(rexaudio PRIVATE
         coreaudio/coreaudio_audio_system.cpp

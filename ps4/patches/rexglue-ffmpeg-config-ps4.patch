@@ -1,0 +1,17 @@
+diff --git a/config.h b/config.h
+index b6a504a887..657bc7909a 100644
+--- a/config.h
++++ b/config.h
+@@ -10,6 +10,12 @@
+ #else
+ #include "config_macos_x86_64.h"
+ #endif
++#elif defined(__ORBIS__)
++/* PS4 (OpenOrbis musl) — C-library math/stdlib surface matches Linux closely
++ * enough that config_linux_x86_64.h works as a drop-in. Without this branch,
++ * no HAVE_* macros are defined and libavutil/libm.h emits static fallbacks
++ * for roundf/trunc/truncf that conflict with the SDK's math.h declarations. */
++#include "config_linux_x86_64.h"
+ #elif defined(__gnu_linux__)
+ #if defined(__aarch64__)
+ #include "config_linux_aarch64.h"

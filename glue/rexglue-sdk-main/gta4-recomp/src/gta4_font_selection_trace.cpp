@@ -144,7 +144,7 @@ const Atlas& Manifest(std::string_view profile, uint32_t logical) {
   static const auto all = [] {
     std::array<std::array<Atlas, 3>, 3> result{};
     const auto root =
-        rex::filesystem::GetExecutableFolder().parent_path() / "Resources/font_atlases";
+        rex::filesystem::GetResourcesFolder() / "font_atlases";
     const std::array<std::string, 3> profiles = {"gta4", "tlad", "tbogt"};
     for (size_t p = 0; p < profiles.size(); ++p) {
       const auto folder = p ? root / profiles[p] : root;

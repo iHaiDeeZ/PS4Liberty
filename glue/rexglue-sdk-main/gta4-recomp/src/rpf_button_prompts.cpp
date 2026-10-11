@@ -457,8 +457,8 @@ std::string SelectVariant() {
 }
 
 std::optional<std::filesystem::path> FindAsset(std::string_view variant) {
-  const auto executable_assets = rex::filesystem::GetExecutableFolder().parent_path() /
-                                 "Resources" / "button_prompts" / variant / "buttons_360.xtd";
+  const auto executable_assets =
+      rex::filesystem::GetResourcesFolder() / "button_prompts" / variant / "buttons_360.xtd";
   std::error_code error;
   if (std::filesystem::is_regular_file(executable_assets, error)) {
     return executable_assets;
@@ -475,7 +475,7 @@ std::optional<std::filesystem::path> FindAsset(std::string_view variant) {
 std::optional<std::vector<uint8_t>> LoadKey(const std::filesystem::path& game_data_root) {
   const std::array candidates = {
       game_data_root.parent_path() / "aes_key.bin", game_data_root / "aes_key.bin",
-      rex::filesystem::GetExecutableFolder().parent_path() / "Resources" / "aes_key.bin"};
+      rex::filesystem::GetResourcesFolder() / "aes_key.bin"};
   for (const auto& candidate : candidates) {
     auto key = ReadFile(candidate);
     if (key && key->size() == 32) {

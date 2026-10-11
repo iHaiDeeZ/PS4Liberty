@@ -22,8 +22,14 @@ static_assert(REX_PLATFORM_PS4, "This file is PS4-only");
 // two declarations.
 extern "C" {
 int32_t scePthreadSetaffinity_proper(OrbisPthread, uint64_t) asm("scePthreadSetaffinity");
+// os/ps4/runtime/ps4_stackdump.cpp: threads in the on-demand stack dumps.
+__attribute__((weak)) void ps4_watch_thread(const char* name);
+__attribute__((weak)) void ps4_name_watched_thread(pthread_t thread, const char* name);
+// Activity counters (ps4_stackdump.cpp): 0 sleep requested us, 1 sleep real us, 5 poll sleeps.
+__attribute__((weak)) void ps4_stat_add(int id, uint64_t value);
 }
 
+#include <algorithm>
 #include <atomic>
 #include <array>
 #include <cerrno>
@@ -42,6 +48,7 @@ int32_t scePthreadSetaffinity_proper(OrbisPthread, uint64_t) asm("scePthreadSeta
 #include <rex/assert.h>
 #include <rex/chrono/chrono_steady_cast.h>
 #include <rex/logging.h>
+#include <rex/memory/utils.h>
 #include <rex/thread/timer_queue.h>
 
 #include <sched.h>
@@ -168,6 +175,19 @@ void SyncMemory() {
 }
 
 void Sleep(std::chrono::microseconds duration) {
+  const auto sleep_start = std::chrono::steady_clock::now();
+  struct SleepStat {
+    std::chrono::steady_clock::time_point start;
+    std::chrono::microseconds requested;
+    ~SleepStat() {
+      if (ps4_stat_add) {
+        ps4_stat_add(0, uint64_t(requested.count()));
+        ps4_stat_add(1, uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+                                     std::chrono::steady_clock::now() - start)
+                                     .count()));
+      }
+    }
+  } sleep_stat{sleep_start, duration};
   timespec rqtp = DurationToTimeSpec(duration);
   timespec rmtp = {};
   auto p_rqtp = &rqtp;
@@ -367,6 +387,9 @@ class PosixConditionBase {
         return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);
       }
 
+      if (ps4_stat_add) {
+        ps4_stat_add(5, 1);
+      }
       if (timeout == std::chrono::milliseconds::max()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
       } else {
@@ -603,27 +626,38 @@ class PosixCondition<Thread> : public PosixConditionBase {
     pthread_attr_t attr;
     if (pthread_attr_init(&attr) != 0)
       return false;
-    if (pthread_attr_setstacksize(&attr, params.stack_size) != 0) {
-      pthread_attr_destroy(&attr);
-      return false;
-    }
-    if (params.initial_priority != 0) {
-      sched_param sched{};
-      sched.sched_priority = params.initial_priority + 1;
-      if (pthread_attr_setschedpolicy(&attr, SCHED_FIFO) != 0) {
+    // The kernel takes thread stacks from flexible memory (~300 MB for the whole app, shared
+    // with system libraries), and every guest thread asks for a 16 MB host stack: the first
+    // game thread already failed. Use direct memory instead, which guest memory comes from too.
+    // The stack is kept for the life of the process: the thread may still be unwinding when
+    // this object is destroyed (the destructor doesn't join).
+    void* stack = rex::memory::AllocFixed(nullptr, params.stack_size,
+                                          rex::memory::AllocationType::kReserveCommit,
+                                          rex::memory::PageAccess::kReadWrite);
+    if (!stack || pthread_attr_setstack(&attr, stack, params.stack_size) != 0) {
+      REXLOG_WARN("PS4: no direct-memory stack for a thread ({} KiB), using the default pool",
+                  params.stack_size / 1024);
+      if (pthread_attr_setstacksize(&attr, params.stack_size) != 0) {
         pthread_attr_destroy(&attr);
         return false;
       }
-      if (pthread_attr_setschedparam(&attr, &sched) != 0) {
-        pthread_attr_destroy(&attr);
-        return false;
-      }
     }
-    if (pthread_create(&thread_, &attr, ThreadStartRoutine, start_data) != 0) {
-      pthread_attr_destroy(&attr);
-      return false;
-    }
+    // Guest thread priorities are not applied on the PS4. They are Windows-style values (around
+    // -15..15), while the PS4's SCHED_FIFO range is 256 (highest) .. 767 with lower = more urgent:
+    // clamping put every prioritized guest thread at the top real-time priority, where spinning
+    // guest threads starved the renderer and presenter (vkQueueSubmit took ~0.6 s per frame
+    // while the GPU frame was 0.4 ms). All threads run at the default priority instead.
+    (void)params.initial_priority;
+    const int error = pthread_create(&thread_, &attr, ThreadStartRoutine, start_data);
     pthread_attr_destroy(&attr);
+    if (error != 0) {
+      uint64_t flexible = 0;
+      // OpenOrbis declares the out-parameter as a size_t value; the ABI is a pointer.
+      sceKernelAvailableFlexibleMemorySize(reinterpret_cast<size_t>(&flexible));
+      REXLOG_ERROR("PS4: pthread_create failed: error {} (stack {} KiB, {} MiB flexible free)",
+                   error, params.stack_size / 1024, flexible >> 20);
+      return false;
+    }
     return true;
   }
 
@@ -738,23 +772,9 @@ class PosixCondition<Thread> : public PosixConditionBase {
   }
 
   void set_priority(int new_priority) {
-    WaitStarted();
-    sched_param param{};
-    param.sched_priority = new_priority;
-    int result = pthread_setschedparam(thread_, SCHED_FIFO, &param);
-    if (result != 0) {
-      switch (result) {
-        case EPERM:
-          REXSYS_WARN("set_priority: permission denied");
-          break;
-        case EINVAL:
-          assert_always();
-          break;
-        default:
-          REXSYS_WARN("set_priority: pthread_setschedparam failed ({})", result);
-          break;
-      }
-    }
+    // Guest priorities aren't applied on the PS4 (see Initialize): Windows-style values in the
+    // PS4's SCHED_FIFO range (256 = highest) starved the renderer and presenter.
+    (void)new_priority;
   }
 
   void QueueUserCallback(std::function<void()> callback) {
@@ -1200,7 +1220,7 @@ class PosixTimer : public PosixConditionHandle<Timer> {
   }
   bool SetOnceAt(WClock_::time_point due_time,
                  std::function<void()> opt_callback = nullptr) override {
-    return SetOnceAt(rex::chrono::clock_cast<GClock_, WClock_>(due_time), std::move(opt_callback));
+    return SetOnceAt(std::chrono::clock_cast<GClock_>(due_time), std::move(opt_callback));
   };
   bool SetOnceAt(GClock_::time_point due_time,
                  std::function<void()> opt_callback = nullptr) override {
@@ -1214,7 +1234,7 @@ class PosixTimer : public PosixConditionHandle<Timer> {
   }
   bool SetRepeatingAt(WClock_::time_point due_time, std::chrono::milliseconds period,
                       std::function<void()> opt_callback = nullptr) override {
-    return SetRepeatingAt(rex::chrono::clock_cast<GClock_, WClock_>(due_time), period,
+    return SetRepeatingAt(std::chrono::clock_cast<GClock_>(due_time), period,
                           std::move(opt_callback));
   }
   bool SetRepeatingAt(GClock_::time_point due_time, std::chrono::milliseconds period,
@@ -1250,6 +1270,9 @@ class PosixThread : public PosixConditionHandle<Thread> {
   void set_name(std::string name) override {
     handle_.WaitStarted();
     Thread::set_name(name);
+    if (ps4_name_watched_thread) {
+      ps4_name_watched_thread(reinterpret_cast<pthread_t>(handle_.native_handle()), name.c_str());
+    }
     if (name.length() > 15) {
       name = name.substr(0, 15);
     }
@@ -1290,6 +1313,9 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
   }
 #endif
   set_current_thread_name("");
+  if (ps4_watch_thread) {
+    ps4_watch_thread("thread");
+  }
 
   auto start_data = static_cast<ThreadStartData*>(parameter);
   assert_not_null(start_data);

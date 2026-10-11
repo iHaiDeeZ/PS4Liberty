@@ -27,28 +27,27 @@ std::int32_t sceKernelDlsym(std::int32_t handle, const char* symbol, void** addr
 namespace rex::platform {
 
 namespace {
-// Handle encoding for PS4 (DynamicLibraryHandle is uintptr_t per dynlib.h):
+// Handle encoding for PS4. handle_ is an opaque void* (dlopen-style); a PS4
+// module is identified by an int32 module ID instead, so the ID is packed
+// into the pointer bits:
 //
 //   bit  63                                    32 31                    0
 //       +---------------------------------------+------------------------+
 //       | kLoadedFlag (1 ULL << 32 when loaded) | module_id (int32 bits) |
 //       +---------------------------------------+------------------------+
 //
-// A handle_ value of exactly 0 (== kInvalidDynamicLibraryHandle) means
-// "not loaded". The kLoadedFlag bit disambiguates a successful load that
-// returned module_id == 0 from the sentinel. Module IDs are stored in
-// the low 32 bits as their raw two's-complement int32 representation,
-// so Decode() round-trips back to int32_t losslessly.
-//
-// The encoding only works if uintptr_t is at least 34 bits wide, which
-// is guaranteed on every 64-bit PS4 build (orbis-clang targets x86_64).
+// A null handle_ means "not loaded". The kLoadedFlag bit disambiguates a
+// successful load that returned module_id == 0 from null. Module IDs are
+// stored in the low 32 bits as their raw two's-complement int32
+// representation, so Decode() round-trips back to int32_t losslessly.
 constexpr std::uintptr_t kLoadedFlag = static_cast<std::uintptr_t>(1) << 32;
 
-inline std::uintptr_t Encode(std::int32_t module_id) {
-  return kLoadedFlag | static_cast<std::uint32_t>(module_id);
+inline void* Encode(std::int32_t module_id) {
+  return reinterpret_cast<void*>(kLoadedFlag | static_cast<std::uint32_t>(module_id));
 }
-inline std::int32_t Decode(std::uintptr_t h) {
-  return static_cast<std::int32_t>(static_cast<std::uint32_t>(h & 0xFFFFFFFFu));
+inline std::int32_t Decode(void* h) {
+  return static_cast<std::int32_t>(
+      static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(h) & 0xFFFFFFFFu));
 }
 }  // namespace
 
@@ -56,19 +55,21 @@ DynamicLibrary::~DynamicLibrary() { Close(); }
 
 DynamicLibrary::DynamicLibrary(DynamicLibrary&& other) noexcept
     : handle_(other.handle_) {
-  other.handle_ = kInvalidDynamicLibraryHandle;
+  other.handle_ = nullptr;
 }
 
 DynamicLibrary& DynamicLibrary::operator=(DynamicLibrary&& other) noexcept {
   if (this != &other) {
     Close();
     handle_ = other.handle_;
-    other.handle_ = kInvalidDynamicLibraryHandle;
+    other.handle_ = nullptr;
   }
   return *this;
 }
 
-bool DynamicLibrary::Load(const std::filesystem::path& path) {
+// sceKernelLoadStartModule always resolves a module's imports at load time,
+// so both SymbolResolution modes behave like kImmediate.
+bool DynamicLibrary::Load(const std::filesystem::path& path, SymbolResolution /*mode*/) {
   Close();
   if (path.empty()) {
     return false;
@@ -89,7 +90,7 @@ bool DynamicLibrary::Load(const std::filesystem::path& path) {
 }
 
 void DynamicLibrary::Close() {
-  if (handle_ == kInvalidDynamicLibraryHandle) {
+  if (!handle_) {
     return;
   }
   const std::int32_t module_id = Decode(handle_);
@@ -100,11 +101,11 @@ void DynamicLibrary::Close() {
     REXLOG_WARN("sceKernelStopUnloadModule({}) failed: 0x{:08x}", module_id,
                 static_cast<std::uint32_t>(rc));
   }
-  handle_ = kInvalidDynamicLibraryHandle;
+  handle_ = nullptr;
 }
 
 void* DynamicLibrary::GetRawSymbol(const char* name) const {
-  if (handle_ == kInvalidDynamicLibraryHandle || !name) {
+  if (!handle_ || !name) {
     return nullptr;
   }
   void* addr = nullptr;

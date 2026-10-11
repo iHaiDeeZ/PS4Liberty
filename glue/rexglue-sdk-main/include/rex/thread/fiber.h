@@ -14,7 +14,8 @@
 #include <rex/platform.h>
 #include <cstddef>
 
-#if (REX_PLATFORM_LINUX || REX_PLATFORM_MAC) && !REX_PLATFORM_IOS && !REX_PLATFORM_ANDROID
+#if ((REX_PLATFORM_LINUX || REX_PLATFORM_MAC) && !REX_PLATFORM_IOS && !REX_PLATFORM_ANDROID) || \
+    REX_PLATFORM_PS4
 #if REX_PLATFORM_MAC && !defined(_XOPEN_SOURCE)
 // Darwin hides the deprecated ucontext APIs unless _XOPEN_SOURCE is defined
 // before including <ucontext.h>.
@@ -64,6 +65,18 @@ struct Fiber {
   void* arg_ = nullptr;
   bool is_thread_fiber_ = false;
   bool started_ = false;
+
+  static void Trampoline();
+#elif REX_PLATFORM_PS4
+  // ucontext from core/ucontext_ps4.c (OpenOrbis declares but does not
+  // implement it). Its swapcontext only saves GPRs, so fiber_ps4.cpp also
+  // fxsave/fxrstors the FPU/SSE state here around each switch.
+  ucontext_t context_{};
+  std::vector<uint8_t> stack_;
+  void (*entry_)(void*) = nullptr;
+  void* arg_ = nullptr;
+  bool is_thread_fiber_ = false;
+  alignas(16) unsigned char fxsave_[512]{};
 
   static void Trampoline();
 #elif REX_PLATFORM_LINUX || REX_PLATFORM_MAC

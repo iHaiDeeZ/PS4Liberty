@@ -5,11 +5,11 @@
 
 #include "graphics_system.h"
 
-extern "C" REX_GPU_PLUGIN_EXPORT uint32_t rex_gpu_abi_version(void) {
+extern "C" REX_GPU_PLUGIN_EXPORT uint32_t REX_GPU_PLUGIN_SYMBOL(rex_gpu_abi_version)(void) {
   return rex::system::kGpuPluginAbiVersion;
 }
 
-extern "C" REX_GPU_PLUGIN_EXPORT rex::system::IGraphicsSystem* rex_gpu_create(
+extern "C" REX_GPU_PLUGIN_EXPORT rex::system::IGraphicsSystem* REX_GPU_PLUGIN_SYMBOL(rex_gpu_create)(
     uint32_t abi_version, const rex::system::GpuCreateInfo* info) {
   if (abi_version != rex::system::kGpuPluginAbiVersion) {
     REXLOG_ERROR("rexgpu-gta4-native: host requested ABI {}, plugin is ABI {}", abi_version,

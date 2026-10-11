@@ -35,6 +35,8 @@ class Surface {
     kTypeIndex_Win32Hwnd,
     // macOS — CAMetalLayer presented via MoltenVK (VK_EXT_metal_surface).
     kTypeIndex_CAMetalLayer,
+    // PS4 — VideoOut, through the WSI in ui/vulkan/vulkan_wsi_ps4.cpp.
+    kTypeIndex_PS4VideoOut,
   };
   using TypeFlags = uint32_t;
   enum : TypeFlags {
@@ -42,6 +44,7 @@ class Surface {
     kTypeFlag_XcbWindow = TypeFlags(1) << kTypeIndex_XcbWindow,
     kTypeFlag_Win32Hwnd = TypeFlags(1) << kTypeIndex_Win32Hwnd,
     kTypeFlag_CAMetalLayer = TypeFlags(1) << kTypeIndex_CAMetalLayer,
+    kTypeFlag_PS4VideoOut = TypeFlags(1) << kTypeIndex_PS4VideoOut,
   };
 
   Surface(const Surface& surface) = delete;

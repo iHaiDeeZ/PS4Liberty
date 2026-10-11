@@ -963,7 +963,13 @@ else()
 
     # ── PS4: FSELF + param.sfo / trophy.trp / PKG pipeline ─────────────────────
     if (LIBERTY_RECOMP_TARGET_PLATFORM STREQUAL "ps4" OR CMAKE_SYSTEM_NAME STREQUAL "PS4")
-        set(LIBERTY_PS4_TOOLCHAIN   "${CMAKE_SOURCE_DIR}/tools/OpenOrbis-PS4-Toolchain")
+        # Follow the toolchain file's resolved root so a prebuilt OpenOrbis
+        # install (with bin/linux tools) works; the submodule is source-only.
+        if (OO_PS4_TOOLCHAIN)
+            set(LIBERTY_PS4_TOOLCHAIN "${OO_PS4_TOOLCHAIN}")
+        else()
+            set(LIBERTY_PS4_TOOLCHAIN "${CMAKE_SOURCE_DIR}/tools/OpenOrbis-PS4-Toolchain")
+        endif()
         set(LIBERTY_PS4_FSELF_PY    "${LIBERTY_PS4_TOOLCHAIN}/scripts/make_fself.py")
         set(LIBERTY_PS4_SFO_PY      "${LIBERTY_PS4_TOOLCHAIN}/scripts/make_param_sfo.py")
         set(LIBERTY_PS4_TRP_PY      "${CMAKE_CURRENT_SOURCE_DIR}/res/ps4/create_trp.py")
@@ -1553,8 +1559,12 @@ endif()
 
 # Console SDK include paths
 if (LIBERTY_RECOMP_PS4)
+    # The OpenOrbis headers themselves come from the toolchain file's -isystem
+    # path (after the libc overlay); adding the SDK include dir here with -I
+    # would put its libc headers in front of the overlay again.
     target_include_directories(LibertyRecomp PRIVATE
-        "${CMAKE_SOURCE_DIR}/tools/OpenOrbis-PS4-Toolchain/include"
+        # Fallback headers for SCE APIs some OpenOrbis distributions don't ship.
+        "${CMAKE_CURRENT_SOURCE_DIR}/os/ps4/include"
     )
 elseif (LIBERTY_RECOMP_NX)
     target_include_directories(LibertyRecomp PRIVATE

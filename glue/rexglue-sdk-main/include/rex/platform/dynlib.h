@@ -71,6 +71,14 @@ inline constexpr const char* kVulkanLoader = "libvulkan.1.dylib";
 inline constexpr const char* kRenderDoc = "librenderdoc.dylib";
 inline constexpr const char* kSpirvToolsSdkPath = "lib/libSPIRV-Tools-shared.dylib";
 
+#elif REX_PLATFORM_PS4
+
+// The PS4 build links Mesa RADV statically and has no Vulkan loader, RenderDoc
+// or SPIRV-Tools shared library to open; these names are never resolved.
+inline constexpr const char* kVulkanLoader = "";
+inline constexpr const char* kRenderDoc = "";
+inline constexpr const char* kSpirvToolsSdkPath = "";
+
 #else
 #error No library names provided for the target platform.
 #endif

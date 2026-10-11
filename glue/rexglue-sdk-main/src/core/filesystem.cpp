@@ -12,9 +12,20 @@
 #include <algorithm>
 
 #include <rex/filesystem.h>
+#include <rex/platform.h>
 
 namespace rex {
 namespace filesystem {
+
+std::filesystem::path GetResourcesFolder() {
+#if REX_PLATFORM_PS4
+  // The executable is /app0/eboot.bin, so the bundle layout below would point
+  // outside the application mount.
+  return "/app0/Resources";
+#else
+  return GetExecutableFolder().parent_path() / "Resources";
+#endif
+}
 
 bool CreateParentFolder(const std::filesystem::path& path) {
   if (path.has_parent_path()) {

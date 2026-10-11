@@ -4,6 +4,7 @@
 #include <cstring>
 #include <utility>
 #include <rex/diagnostics/policy.h>
+#include <rex/platform.h>
 #include <rex/graphics/gta4_native/gpu_pass_origin.h>
 #include <rex/graphics/gta4_native/title_commands.h>
 #include "../../src/graphics/gta4_metal/temporal/title_boundary.h"
@@ -26,6 +27,11 @@ class ScopedFinalComposite {
 inline std::atomic<bool> temporal_inputs{false};
 inline std::atomic<uint64_t> next_scope{1},unresolved_scopes{0},conflicting_scopes{0},oversized_envelopes{0};
 inline bool Enabled(){
+#if REX_PLATFORM_PS4
+  // The shadow / reflection update intervals (graphics_system.cpp, PS4 performance mode) find
+  // those passes by these markers; without them nothing is ever skipped.
+  return true;
+#endif
   static const bool markers=[] {const char* p=std::getenv("REX_GTA4_GPU_PASS_MARKERS");return p&&std::strcmp(p,"1")==0;}();
   return temporal_inputs.load(std::memory_order_relaxed)||markers||rex::diagnostics::IsEnabled(rex::diagnostics::Category::kNativeProfiler);
 }

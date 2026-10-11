@@ -3,6 +3,11 @@ set(REXGLUE_USE_D3D12 OFF CACHE BOOL "" FORCE)
 set(REXGLUE_ENABLE_FIDELITYFX OFF CACHE BOOL "Enable optional FidelityFX temporal providers")
 set(REXGLUE_BUILD_TESTS OFF CACHE BOOL "")
 
+if(PS4)
+    # Tracy is a desktop profiler built as a shared library with no PS4 port.
+    set(REXGLUE_ENABLE_TRACY OFF CACHE BOOL "" FORCE)
+endif()
+
 set(REXSDK_DIR "${CMAKE_SOURCE_DIR}/glue/rexglue-sdk-main"
     CACHE PATH "Path to the Graine RexGlue SDK source tree")
 

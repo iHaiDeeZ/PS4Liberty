@@ -939,7 +939,7 @@ X_STATUS XThread::Resume(uint32_t* out_suspend_count) {
     *out_suspend_count = previous_suspend_count;
   }
   return thread_->Resume(&unused_host_suspend_count) ? X_STATUS_SUCCESS : X_STATUS_UNSUCCESSFUL;
-#elif REX_PLATFORM_LINUX || REX_PLATFORM_MAC
+#elif REX_PLATFORM_LINUX || REX_PLATFORM_MAC || REX_PLATFORM_PS4
   bool should_resume_host = false;
   {
     std::lock_guard<std::mutex> lock(suspend_mutex_);
@@ -972,7 +972,7 @@ X_STATUS XThread::Resume(uint32_t* out_suspend_count) {
 }
 
 X_STATUS XThread::ResumeFromInitialSuspension(uint32_t* out_suspend_count) {
-#if REX_PLATFORM_LINUX || REX_PLATFORM_MAC
+#if REX_PLATFORM_LINUX || REX_PLATFORM_MAC || REX_PLATFORM_PS4
   auto guest_thread = guest_object<X_KTHREAD>();
   bool should_resume_host = false;
   {
@@ -1018,7 +1018,7 @@ X_STATUS XThread::Suspend(uint32_t* out_suspend_count) {
   return thread_->Suspend(&unused_host_suspend_count) ? X_STATUS_SUCCESS : X_STATUS_UNSUCCESSFUL;
 }
 
-#if REX_PLATFORM_LINUX || REX_PLATFORM_MAC
+#if REX_PLATFORM_LINUX || REX_PLATFORM_MAC || REX_PLATFORM_PS4
 uint32_t XThread::SelfSuspend() {
   auto guest_thread = guest_object<X_KTHREAD>();
   std::unique_lock<std::mutex> lock(suspend_mutex_);

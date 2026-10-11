@@ -16,8 +16,9 @@ namespace rex {
 namespace ui {
 
 std::unique_ptr<RenderDocAPI> RenderDocAPI::CreateIfConnected() {
-#if REX_PLATFORM_MAC
-  // The vendored RenderDoc app API header doesn't expose a macOS path.
+#if REX_PLATFORM_MAC || REX_PLATFORM_PS4
+  // The vendored RenderDoc app API header doesn't expose a macOS path, and
+  // RenderDoc cannot attach to a PS4 process.
   // Keep RenderDoc optional and simply report "not connected" on this platform.
   return nullptr;
 #else

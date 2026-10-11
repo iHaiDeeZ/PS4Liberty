@@ -73,6 +73,33 @@ elseif(APPLE)
         system_posix.cpp
         threading_mac.cpp
     )
+elseif(PS4)
+    # OpenOrbis: POSIX implementations where libkernel/musl cover them, PS4
+    # variants for threading (scePthread affinity/priority), fibers (custom
+    # ucontext), memory (sceKernel direct/flexible memory), dynlib (sceKernel
+    # module loading), signal contexts (FreeBSD mcontext), logging
+    # (sceKernelDebugOutText) and networking.
+    target_sources(rexcore PRIVATE
+        atomic_posix.cpp
+        clock_posix.cpp
+        dbg_posix.cpp
+        dynlib_ps4.cpp
+        exception_handler_ps4.cpp
+        filesystem_posix.cpp
+        fiber_ps4.cpp
+        ucontext_ps4.c
+        logging_ps4.cpp
+        mapped_memory_posix.cpp
+        math_gcc.cpp
+        memory_ps4.cpp
+        net_ps4.cpp
+        platform/console_posix.cpp
+        platform/env_posix.cpp
+        seh_posix.cpp
+        socket_posix.cpp
+        system_posix.cpp
+        threading_ps4.cpp
+    )
 elseif(UNIX)
     if(ANDROID)
         set(REXCORE_POSIX_FIBER fiber_android.cpp)
@@ -134,6 +161,9 @@ endif()
 
 if(APPLE)
     target_link_libraries(rexcore PRIVATE pthread)
+elseif(PS4)
+    # pthreads, clocks and module loading all come from libkernel, which the
+    # PS4 toolchain links into every executable.
 elseif(UNIX)
     target_link_libraries(rexcore PRIVATE pthread rt dl)
 endif()

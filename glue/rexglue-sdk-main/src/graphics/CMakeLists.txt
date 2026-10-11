@@ -2,7 +2,8 @@
 # Namespace: rex::graphics
 #
 # Runtime-loaded via rex::system::LoadGpuPlugin; consumers never link this
-# target. The Xenos format layer is compiled into rexcore.
+# target, except where plugins are static (see REXGPU_PLUGIN_LIBRARY_TYPE).
+# The Xenos format layer is compiled into rexcore.
 
 set(REXGPU_XENOS_SOURCES
     # Core GPU types
@@ -95,12 +96,30 @@ if(REXGLUE_USE_D3D12)
         ${REXGPU_XENOS_D3D12_SOURCES})
 endif()
 
+# Plugins are shared libraries loaded at runtime, except on platforms that
+# cannot load them (PS4): there they are static libraries the executable links
+# and registers with rex::system::RegisterStaticGpuPlugin.
+if(PS4)
+    set(REXGPU_PLUGIN_LIBRARY_TYPE STATIC)
+else()
+    set(REXGPU_PLUGIN_LIBRARY_TYPE SHARED)
+endif()
+
 function(rexgpu_configure_plugin target export_name)
     set_target_properties(${target} PROPERTIES
         EXPORT_NAME ${export_name}
         CXX_VISIBILITY_PRESET hidden
         VISIBILITY_INLINES_HIDDEN ON
     )
+
+    if(REXGPU_PLUGIN_LIBRARY_TYPE STREQUAL "STATIC")
+        # rexgpu-gta4-native -> rex_gpu_create_gta4_native etc. (see
+        # REX_GPU_PLUGIN_SYMBOL in rex/system/gpu_plugin.h).
+        string(REGEX REPLACE "^rexgpu-" "" _rexgpu_static_id "${target}")
+        string(REPLACE "-" "_" _rexgpu_static_id "${_rexgpu_static_id}")
+        target_compile_definitions(${target} PRIVATE
+            REX_GPU_PLUGIN_STATIC_ID=${_rexgpu_static_id})
+    endif()
 
     target_include_directories(${target} PRIVATE
         ${REXGLUE_ROOT}/thirdparty/renderdoc
@@ -140,7 +159,7 @@ function(rexgpu_configure_plugin target export_name)
     endif()
 endfunction()
 
-add_library(rexgpu-xenos SHARED
+add_library(rexgpu-xenos ${REXGPU_PLUGIN_LIBRARY_TYPE}
     plugin_main.cpp
     ${REXGPU_XENOS_SOURCES}
 )
@@ -272,11 +291,19 @@ if(REXGLUE_USE_VULKAN)
         set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
         set(ZSTD_BUILD_STATIC ON CACHE BOOL "" FORCE)
         set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        # Only decompression is used. The dictionary builder also needs
+        # qsort_r, which OpenOrbis' musl lacks.
+        set(ZSTD_BUILD_DICTBUILDER OFF CACHE BOOL "" FORCE)
         add_subdirectory("${GTA4_NATIVE_ZSTD_ROOT}/build/cmake"
             "${CMAKE_CURRENT_BINARY_DIR}/gta4_native_zstd")
     endif()
+    if(PS4)
+        # zstd's trace hooks are weak undefined symbols, which create-fself
+        # rejects (every unresolved symbol must come from a PS4 module).
+        target_compile_definitions(libzstd_static PRIVATE ZSTD_TRACE=0)
+    endif()
 
-    add_library(rexgpu-gta4-native SHARED
+    add_library(rexgpu-gta4-native ${REXGPU_PLUGIN_LIBRARY_TYPE}
         gta4_native/graphics_system.cpp
         gta4_native/core/font_atlas.cpp
         gta4_native/shader_override_policy.h

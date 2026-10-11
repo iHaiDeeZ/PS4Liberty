@@ -218,6 +218,29 @@ bool Memory::Initialize() {
                           rex::memory::AllocationType::kCommit,
                           rex::memory::PageAccess::kReadWrite);
 
+#if REX_PLATFORM_PS4
+  // The PS4 backs the views with aliased direct memory (memory_ps4.cpp): check that a write
+  // through one view is seen through the others, as the renderer reads guest data through a
+  // different view than the game writes it.
+  {
+    auto probe = [](uint8_t* write_at, uint8_t* read_at, uint32_t value) {
+      auto* w = reinterpret_cast<volatile uint32_t*>(write_at);
+      auto* r = reinterpret_cast<volatile uint32_t*>(read_at);
+      const uint32_t saved = *w;
+      *w = value;
+      const uint32_t seen = *r;
+      *w = saved;
+      return seen == value;
+    };
+    const bool a = probe(physical_membase_ + 0x1100, virtual_membase_ + 0xA0001100, 0xA11A5A01u);
+    const bool c = probe(virtual_membase_ + 0xC0002200, physical_membase_ + 0x2200, 0xA11A5C02u);
+    const bool w = probe(virtual_membase_ + 0x7F003300, physical_membase_ + 0x3300, 0xA11A5703u);
+    REXSYS_INFO("PS4 memory aliasing self-test: physical->A0000000 {}, C0000000->physical {}, "
+                "7F000000->physical {}",
+                a ? "ok" : "FAILED", c ? "ok" : "FAILED", w ? "ok" : "FAILED");
+  }
+#endif
+
   // Install MMIO handler for physical address translation and MMIO ranges
   mmio_handler_ = runtime::MMIOHandler::Install(
       virtual_membase_, physical_membase_, physical_membase_ + 0x1FFFFFFF, HostToGuestVirtualThunk,

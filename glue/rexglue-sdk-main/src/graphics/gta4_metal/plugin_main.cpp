@@ -5,11 +5,11 @@
 
 #include "graphics_system.h"
 
-extern "C" REX_GPU_PLUGIN_EXPORT uint32_t rex_gpu_abi_version() {
+extern "C" REX_GPU_PLUGIN_EXPORT uint32_t REX_GPU_PLUGIN_SYMBOL(rex_gpu_abi_version)() {
   return rex::system::kGpuPluginAbiVersion;
 }
 
-extern "C" REX_GPU_PLUGIN_EXPORT rex::system::IGraphicsSystem* rex_gpu_create(
+extern "C" REX_GPU_PLUGIN_EXPORT rex::system::IGraphicsSystem* REX_GPU_PLUGIN_SYMBOL(rex_gpu_create)(
     uint32_t abi, const rex::system::GpuCreateInfo* info) {
   if (abi != rex::system::kGpuPluginAbiVersion || !info ||
       info->struct_size < sizeof(rex::system::GpuCreateInfo)) {

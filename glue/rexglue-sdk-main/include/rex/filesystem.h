@@ -39,6 +39,11 @@ std::filesystem::path GetExecutableFolder();
 // Get user folder.
 std::filesystem::path GetUserFolder();
 
+// Get the folder of read-only resources shipped with the application: the
+// bundle's Resources folder next to the executable's folder (macOS layout,
+// <executable folder>/../Resources), or /app0/Resources on the PS4.
+std::filesystem::path GetResourcesFolder();
+
 // Creates the parent folder of the specified path if needed.
 // This can be used to ensure the destination path for a new file exists before
 // attempting to create it.

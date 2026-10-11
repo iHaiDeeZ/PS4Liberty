@@ -28,6 +28,8 @@
 #include <rex/audio/audio_system.h>
 #if REX_PLATFORM_MAC && !REX_PLATFORM_IOS
 #include <rex/audio/coreaudio/coreaudio_audio_system.h>
+#elif REX_PLATFORM_PS4
+#include "../audio/orbis/orbis_audio_system.h"
 #else
 #include <rex/audio/sdl/sdl_audio_system.h>
 #endif
@@ -93,15 +95,19 @@ bool ReXApp::OnInitialize() {
   if (!SetupPresentation())
     return false;
 
+  REXLOG_INFO("startup: presentation ready, finalizing paths");
   auto paths = OnFinalizePaths(resolved_defaults_, MakeResumeCallback());
   if (!paths) {
+    REXLOG_INFO("startup: waiting for the install/setup dialog");
     // Async: consumer will invoke resume when ready. OnInitialize returns
     // true so the event loop keeps pumping (wizard dialogs render).
     return true;
   }
 
+  REXLOG_INFO("startup: constructing runtime");
   if (!ConstructRuntime(*paths))
     return false;
+  REXLOG_INFO("startup: launching module");
   LaunchModule();
   return true;
 }
@@ -188,11 +194,11 @@ bool ReXApp::SetupEnvironment() {
                                         log_level_str, category_levels);
   if (log_file_cvar.empty()) {
     log_config.app_name = std::string(GetName());
-#if REX_PLATFORM_MAC
+#if REX_PLATFORM_MAC || REX_PLATFORM_PS4
     // A macOS bundle's Contents/MacOS directory is code-signing territory.
     // Runtime logs placed there make a subsequent incremental build fail to
     // seal the bundle.  Keep mutable diagnostics with the rest of the title's
-    // user data instead.
+    // user data instead. On PS4 the executable folder (/app0) is read-only.
     log_config.log_dir = (user_dir / "logs").string();
 #else
     log_config.log_dir = (exe_dir / "logs").string();
@@ -361,6 +367,8 @@ bool ReXApp::SetupPresentation() {
   config_.gpu_plugin = REXCVAR_GET(gpu_plugin);
 #if REX_PLATFORM_MAC && !REX_PLATFORM_IOS
   config_.audio_factory = REX_AUDIO_BACKEND(rex::audio::coreaudio::CoreAudioAudioSystem);
+#elif REX_PLATFORM_PS4
+  config_.audio_factory = REX_AUDIO_BACKEND(rex::audio::orbis::OrbisAudioSystem);
 #else
   config_.audio_factory = REX_AUDIO_BACKEND(rex::audio::sdl::SDLAudioSystem);
 #endif

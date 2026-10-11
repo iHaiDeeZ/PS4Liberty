@@ -33,7 +33,12 @@ namespace rex::memory::detail {
 /// The backing file maps the 0xE0 heap at a 0x1000-byte offset, but MapViewOfFileEx
 /// rounds down to 64KB boundaries. Linux mmap handles 4KB offsets natively.
 constexpr u32 PhysicalHostOffset([[maybe_unused]] u32 guest_addr) noexcept {
-#if REX_PLATFORM_WIN32 || REX_PLATFORM_MAC
+// The PS4 maps memory in 16 KB pages: like Windows (64 KB granularity) it can't map the 0xE0
+// heap at its 4 KB file offset, so the runtime heaps use host_address_offset 0x1000 there
+// (PhysicalHeap::Initialize) and guest code must add it too. Without it the game wrote the
+// 0xE0000000 range 4 KB away from where the kernel/XMA/GPU read it (empty XMA contexts, the
+// intro cutscene waiting forever for audio on the loading screen).
+#if REX_PLATFORM_WIN32 || REX_PLATFORM_MAC || REX_PLATFORM_PS4
   return (guest_addr >= 0xE0000000u) ? 0x1000u : 0u;
 #else
   return 0u;

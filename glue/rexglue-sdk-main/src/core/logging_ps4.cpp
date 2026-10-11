@@ -12,6 +12,9 @@
 
 #if REX_PLATFORM_PS4
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <memory>
 #include <mutex>
 #include <string>
@@ -37,6 +40,12 @@ class Ps4DebugSink final : public spdlog::sinks::base_sink<std::mutex> {
     if (line.empty() || line.back() != '\n')
       line.push_back('\n');
     sceKernelDebugOutText(0, line.c_str());
+    // Also to a file on /data: retail consoles have no debug output. Written
+    // unbuffered, so the lines before a crash survive it.
+    static const int fd =
+        open("/data/LibertyRecomp/rex.log", O_WRONLY | O_CREAT | O_TRUNC | O_APPEND, 0666);
+    if (fd >= 0)
+      write(fd, line.data(), line.size());
   }
 
   void flush_() override {}

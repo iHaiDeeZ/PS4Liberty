@@ -606,6 +606,12 @@ void Presenter::PaintFromUIThreadImpl(bool force_paint, bool display_opportunity
   }
 }
 
+#if REX_PLATFORM_PS4
+// Activity counters (os/ps4/runtime/ps4_stackdump.cpp): 8 guest frames published to the presenter,
+// 9 refreshes that failed, 10 host paints presented, 11 paints not presented (value: result).
+extern "C" __attribute__((weak)) void ps4_stat_add(int id, uint64_t value);
+#endif
+
 bool Presenter::RefreshGuestOutput(
     uint32_t frontbuffer_width, uint32_t frontbuffer_height, uint32_t display_aspect_ratio_x,
     uint32_t display_aspect_ratio_y,
@@ -636,6 +642,9 @@ bool Presenter::RefreshGuestOutput(
     };
     if (!RefreshGuestOutputImpl(guest_output_mailbox_writable_, frontbuffer_width,
                                 frontbuffer_height, observed_refresher, writable_properties.is_8bpc)) {
+#if REX_PLATFORM_PS4
+      if (ps4_stat_add) ps4_stat_add(9, 1);
+#endif
       // If failed to refresh, don't send the currently writable image to the
       // mailbox as it may be in an undefined state. Don't disable the guest
       // output either though because the failure may be something transient.
@@ -675,6 +684,9 @@ bool Presenter::RefreshGuestOutput(
   // after switching from UI thread painting to doing it in the guest output
   // thread, will immediately recover to having the latest frame always sent to
   // the host present call on the CPU and all frames reaching a present call).
+#if REX_PLATFORM_PS4
+  if (ps4_stat_add) ps4_stat_add(8, is_active ? 1 : 0);
+#endif
   uint32_t published_mailbox_index = guest_output_mailbox_writable_;
   uint32_t last_acquired_and_ready =
       guest_output_mailbox_acquired_and_ready_.load(std::memory_order_relaxed);
@@ -1817,6 +1829,13 @@ Presenter::PaintResult Presenter::PaintAndPresent(bool execute_ui_drawers) {
   paint_retry_delay_ns_.store(1'000'000, std::memory_order_relaxed);
   const uint64_t paint_begin_ns = FramePacerNowNs();
   PaintResult result = PaintAndPresentImpl(execute_ui_drawers);
+#if REX_PLATFORM_PS4
+  if (ps4_stat_add) {
+    const bool presented =
+        result == PaintResult::kPresented || result == PaintResult::kPresentedSuboptimal;
+    ps4_stat_add(presented ? 10 : 11, uint64_t(result));
+  }
+#endif
   if (result == PaintResult::kPresented || result == PaintResult::kPresentedSuboptimal) {
     const uint64_t queue_end_ns = FramePacerNowNs();
     frame_pacer_.Queued(queue_end_ns);

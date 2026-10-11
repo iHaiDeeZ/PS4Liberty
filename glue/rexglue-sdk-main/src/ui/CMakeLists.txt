@@ -78,6 +78,10 @@ elseif(APPLE)
     endif()
 elseif(ANDROID)
     set(REXUI_PLATFORM_SOURCES surface_android.cpp)
+elseif(PS4)
+    # VideoOut presentation: VK_KHR_surface / VK_KHR_swapchain implemented on
+    # top of Mesa RADV, which has no window system integration on the PS4.
+    set(REXUI_PLATFORM_SOURCES vulkan/vulkan_wsi_ps4.cpp)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(REXUI_PLATFORM_SOURCES
         surface_gnulinux.cpp

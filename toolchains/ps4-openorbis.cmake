@@ -40,6 +40,8 @@ message(STATUS "Using OpenOrbis PS4 Toolchain: ${OO_PS4_TOOLCHAIN}")
 
 set(CMAKE_SYSTEM_NAME PS4)
 set(CMAKE_SYSTEM_PROCESSOR x86_64)
+# Platform/PS4.cmake lives next to this file (FreeBSD-derived UNIX platform).
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}")
 
 # OpenOrbis sample builds target FreeBSD ELF and rely on link.x + create-fself
 # for PS4-specific rewriting. Match that model instead of mixing in the
@@ -104,29 +106,54 @@ string(APPEND _PS4_LINK_FLAGS " -Wl,--script=${OO_PS4_TOOLCHAIN}/link.x")
 # Drop crti.o/crtn.o — those are FreeBSD's _init/_fini wrappers; PS4 uses
 # .ctors/.dtors arrays processed by crt1.o, not _init/_fini sections.
 string(APPEND _PS4_LINK_FLAGS " ${OO_PS4_TOOLCHAIN}/lib/crt1.o")
-# C/C++ standard libraries (musl libc, libc++, libc++abi, unwind, compiler-rt)
-# libcxx_ps4_compat.a: LLVM 21 libc++/libc++abi compiled for PS4 (replaces old OO SDK versions)
-# --allow-multiple-definition kept because libcxx_ps4_compat overlaps SDK libc++.
-# TODO(ps4): move to one libc++ source — drop either the compat archive or
-# the SDK -lc++/-lc++abi/-lunwind, and remove the workaround.
-string(APPEND _PS4_LINK_FLAGS " -Wl,--allow-multiple-definition")
-string(APPEND _PS4_LINK_FLAGS " ${OO_PS4_TOOLCHAIN}/lib/libcxx_ps4_compat.a")
-string(APPEND _PS4_LINK_FLAGS " -lc++ -lc++abi -lunwind -lc -lm")
-string(APPEND _PS4_LINK_FLAGS " ${OO_PS4_TOOLCHAIN}/lib/libclang_rt.builtins-x86_64.a")
-# PS4 kernel (provides pthread, sceKernel*, mmap, etc.)
-string(APPEND _PS4_LINK_FLAGS " -lkernel")
-# PS4 SDK stub libraries — each adds one DT_SCE_IMPORT_LIB_ATTR. shadPS4 logs
-# `unsupported DT_SCE_IMPORT_LIB_ATTR` for each (~23 entries today). TODO(ps4):
-# audit which Sce* APIs the recomp actually calls and trim the list, since
-# every speculatively-linked stub forces shadPS4/PS4 to runtime-resolve a PRX.
-string(APPEND _PS4_LINK_FLAGS " -lSceSystemService -lSceSysmodule -lScePad -lSceUserService")
-string(APPEND _PS4_LINK_FLAGS " -lSceAudioOut -lSceAudioIn -lSceVideoOut")
-string(APPEND _PS4_LINK_FLAGS " -lSceNet -lSceNetCtl -lSceHttp -lSceSsl")
-string(APPEND _PS4_LINK_FLAGS " -lSceNpManager -lSceNpTrophy -lSceNpSignaling -lSceNpMatching2")
-string(APPEND _PS4_LINK_FLAGS " -lSceSaveData -lSceCommonDialog -lSceMsgDialog")
-string(APPEND _PS4_LINK_FLAGS " -lSceGnmDriver -lSceFios2 -lScePosix")
-string(APPEND _PS4_LINK_FLAGS " -lSceRtc")
+# The clang FreeBSD driver adds -dynamic-linker /libexec/ld-elf.so.1, which
+# makes lld emit a .interp section in front of .text. link.x already embeds the
+# interpreter string at the start of .text; the extra PT_INTERP and the shifted
+# code segment make the console refuse the eboot (CE-41839-5).
+string(APPEND _PS4_LINK_FLAGS " -Wl,--no-dynamic-linker")
 set(CMAKE_EXE_LINKER_FLAGS_INIT "-fuse-ld=lld ${_PS4_LINK_FLAGS}")
+# No library search paths in the eboot: CMake would otherwise add a build RPATH
+# for the SDK stub library directory (a host path), which becomes a DT_RUNPATH
+# the PS4 loader does not accept.
+set(CMAKE_SKIP_RPATH ON)
+
+# Standard libraries go at the end of the link line, after the program's own
+# objects and libraries (CMAKE_<LANG>_STANDARD_LIBRARIES). In the linker flags
+# they would come first, and an early reference would pull libc members such
+# as memcpy or the C11 thread functions out of libc.a even though the program
+# (or Mesa, linked as whole archives) defines them, giving duplicate symbols.
+#
+# C/C++ runtime (musl libc, libc++, libc++abi, unwind, compiler-rt).
+# libcxx_ps4_compat.a: LLVM 21 libc++ + libc++abi compiled for PS4. It is the
+# only C++ runtime linked: the SDK's own LLVM 12 libc++/libc++abi are left out
+# so the two can never mix. libunwind comes from the SDK.
+set(_PS4_STD_LIBS "${OO_PS4_TOOLCHAIN}/lib/libcxx_ps4_compat.a")
+# PS4 kernel (provides pthread, sceKernel*, mmap, sockets, signals, dl*, etc.).
+# It must come before libc.a: functions both provide must resolve to the
+# kernel. Taken from libc.a instead, they would be linked into the eboot and
+# exported to override the kernel's (e.g. __tls_get_addr, dlopen, sem_*),
+# and the console refuses to start such an eboot (CE-41839-5).
+string(APPEND _PS4_STD_LIBS " -lkernel")
+string(APPEND _PS4_STD_LIBS " -lunwind -lc -lm")
+string(APPEND _PS4_STD_LIBS " ${OO_PS4_TOOLCHAIN}/lib/libclang_rt.builtins-x86_64.a")
+# Sony's system libc: libc.a's malloc.lo (pulled in by libc start-up through
+# malloc_init) is built on its sceLibcMspace API, and it applies the
+# malloc-replacement table of a replacement crt1.o (cmake/PS4Runtime.cmake).
+string(APPEND _PS4_STD_LIBS " -lSceLibcInternal")
+# PS4 SDK stub libraries. Each one that ends up needed becomes a module the
+# loader must resolve at launch, so they are linked --as-needed: only the ones
+# the program actually calls are imported. (No NP/PSN libraries: the build
+# does not use them, and PacBrew's OpenOrbis has no libSceNpManager stub.)
+string(APPEND _PS4_STD_LIBS " -Wl,--as-needed")
+string(APPEND _PS4_STD_LIBS " -lSceSystemService -lSceSysmodule -lScePad -lSceUserService")
+string(APPEND _PS4_STD_LIBS " -lSceAudioOut -lSceAudioIn -lSceVideoOut")
+string(APPEND _PS4_STD_LIBS " -lSceNet -lSceNetCtl -lSceHttp -lSceSsl")
+string(APPEND _PS4_STD_LIBS " -lSceSaveData -lSceCommonDialog -lSceMsgDialog")
+string(APPEND _PS4_STD_LIBS " -lSceGnmDriver -lSceFios2 -lScePosix")
+string(APPEND _PS4_STD_LIBS " -lSceRtc")
+string(APPEND _PS4_STD_LIBS " -Wl,--no-as-needed")
+set(CMAKE_C_STANDARD_LIBRARIES_INIT "${_PS4_STD_LIBS}")
+set(CMAKE_CXX_STANDARD_LIBRARIES_INIT "${_PS4_STD_LIBS}")
 
 # Cross-compilation: skip try_compile linking
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
@@ -159,6 +186,17 @@ if(_CLANG_RESOURCE_DIR)
     string(APPEND _PS4_C_ISYSTEM   " -isystem ${_CLANG_RESOURCE_DIR}/include")
     string(APPEND _PS4_CXX_ISYSTEM " -isystem ${_CLANG_RESOURCE_DIR}/include")
 endif()
+# 3a) Optional libc header overlay (PS4_LIBC_OVERLAY, CMake or env var):
+#     replacement/wrapper headers that #include_next the OpenOrbis originals,
+#     e.g. a math.h without the C++ isfinite/isnan overloads that collide with
+#     modern libc++'s <cmath>.
+if(NOT PS4_LIBC_OVERLAY AND DEFINED ENV{PS4_LIBC_OVERLAY})
+    set(PS4_LIBC_OVERLAY "$ENV{PS4_LIBC_OVERLAY}")
+endif()
+if(PS4_LIBC_OVERLAY)
+    string(APPEND _PS4_C_ISYSTEM   " -isystem ${PS4_LIBC_OVERLAY}")
+    string(APPEND _PS4_CXX_ISYSTEM " -isystem ${PS4_LIBC_OVERLAY}")
+endif()
 # 3) OpenOrbis SDK C headers (musl: string.h, stdio.h, pthread.h, etc.)
 string(APPEND _PS4_C_ISYSTEM   " -isystem ${OO_PS4_TOOLCHAIN}/include")
 string(APPEND _PS4_CXX_ISYSTEM " -isystem ${OO_PS4_TOOLCHAIN}/include")
@@ -175,6 +213,10 @@ message(STATUS "PS4: Using Homebrew LLVM from ${_BREW_LLVM_DIR}")
 # Note: _LIBCPP_HAS_MUSL_LIBC and _LIBCPP_HAS_THREAD_API_PTHREAD are set
 # via the __config_site overlay in include/c++/v1/__config_site.
 set(_PS4_DEFINES "-D__ORBIS__ -D_GNU_SOURCE -U__FreeBSD__ -D_LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE")
+# The PS4 CPU is AMD Jaguar (AVX, F16C, BMI1, SSE4.2; no AVX2/BMI2). It goes in
+# the base flags so that try_compile feature checks (e.g. snappy's SIMD probes)
+# see the same instruction set as the real compile.
+string(APPEND _PS4_DEFINES " -march=btver2")
 
 # Suppress default includes and set our explicit ordered paths
 # Modern clang may define wchar_t via stddef.h before OpenOrbis musl headers,

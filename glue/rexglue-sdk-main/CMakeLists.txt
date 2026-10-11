@@ -114,10 +114,12 @@ set(CMAKE_RELWITHDEBINFO_POSTFIX rd)
 
 if(NOT WIN32)
     # Use appropriate code model based on architecture
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64" AND NOT APPLE)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64" AND NOT APPLE AND NOT PS4)
         # Large code model on Linux x86_64 for linking with very large recompiled executables (35MB+).
         # macOS uses small: the ld64 linker on macOS 15+ rejects text relocations produced
         # by -mcmodel=large, and macOS maps binaries in the low address space so ±2GB is sufficient.
+        # PS4 uses small too: create-fself cannot process the absolute text
+        # relocations -mcmodel=large emits into a PIE eboot.
         add_compile_options(-mcmodel=large)
     else()
         add_compile_options(-mcmodel=small)
@@ -132,7 +134,8 @@ add_compile_options(
     -ffp-model=strict
     $<$<CONFIG:DEBUG>:-g>
     $<$<CONFIG:DEBUG>:-O0>
-    $<$<CONFIG:RELEASE>:-O3>
+    # PS4: the build script's -O2 -finline-hint-functions (see scripts/build-ps4.sh).
+    $<$<AND:$<CONFIG:RELEASE>,$<NOT:$<BOOL:${PS4}>>>:-O3>
     $<$<CONFIG:RELEASE>:-DNDEBUG>
     -fno-char8_t
 )
@@ -156,6 +159,10 @@ if(WIN32)
         message(FATAL_ERROR "Unsupported Windows architecture: ${REX_TARGET_PROCESSOR}")
     endif()
     add_compile_definitions(REX_PLATFORM_WINDOWS=1)
+elseif(PS4)
+    # OpenOrbis PS4 (FreeBSD-derived, musl headers). REX_PLATFORM_PS4 comes
+    # from rex/platform.h via the toolchain's __ORBIS__ define.
+    set(REX_PLATFORM "ps4-amd64")
 elseif(UNIX AND NOT APPLE)
     if(REX_TARGET_PROCESSOR MATCHES "AMD64|x86_64")
         set(REX_PLATFORM "linux-amd64")

@@ -116,8 +116,9 @@ using XSystemClock = detail::NtSystemClock<detail::Domain::Guest>;
 
 namespace std::chrono {
 
-#ifdef __APPLE__
-// Apple libc++ does not expose clock_time_conversion or clock_cast.
+#if defined(__APPLE__) || defined(__ORBIS__)
+// Apple libc++ does not expose clock_time_conversion or clock_cast; neither
+// does the LLVM 21 libc++ used for PS4 builds.
 template <class, class>
 struct clock_time_conversion {};
 

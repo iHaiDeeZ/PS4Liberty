@@ -57,6 +57,12 @@ REXCVAR_DEFINE_INT32(log_max_files, 20, "Log", "Max number of rotated log files 
     .range(1, 100)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+#if REX_PLATFORM_PS4
+namespace rex::logging {
+std::shared_ptr<spdlog::sinks::sink> CreateNativeLogSink();  // logging_ps4.cpp
+}  // namespace rex::logging
+#endif
+
 namespace rex {
 
 namespace {
@@ -65,6 +71,7 @@ std::vector<LogCategoryEntry> g_registry;
 spdlog::sink_ptr g_console_sink;
 spdlog::sink_ptr g_file_sink;
 spdlog::sink_ptr g_early_sink;
+spdlog::sink_ptr g_native_sink;  // platform log output that outlives the early sink
 std::vector<spdlog::sink_ptr> g_extra_sinks;
 bool g_early_initialized = false;
 bool g_initialized = false;
@@ -102,6 +109,8 @@ std::vector<spdlog::sink_ptr> BuildDefaultSinks() {
     sinks.push_back(g_console_sink);
   if (g_file_sink)
     sinks.push_back(g_file_sink);
+  if (g_native_sink)
+    sinks.push_back(g_native_sink);
   for (auto& s : g_extra_sinks)
     sinks.push_back(s);
   return sinks;
@@ -159,6 +168,11 @@ void InitLoggingEarly() {
   sink->set_level(spdlog::level::trace);
   sink->set_pattern("[%l] [%n] %v");
   g_early_sink = sink;
+#if REX_PLATFORM_PS4
+  g_native_sink = logging::CreateNativeLogSink();
+  g_native_sink->set_level(spdlog::level::trace);
+  g_native_sink->set_pattern("[%H:%M:%S.%e] [%l] [%n] %v");
+#endif
 
   g_config.default_level = kDefaultLogLevel;
 

@@ -27,6 +27,13 @@
 #include <rex/system/xsymboliclink.h>
 #include <rex/system/xthread.h>
 
+#include <rex/platform.h>
+#if REX_PLATFORM_PS4
+#include <chrono>
+// Activity counters (os/ps4/runtime/ps4_stackdump.cpp): 4 wait time us.
+extern "C" __attribute__((weak)) void ps4_stat_add(int id, uint64_t value);
+#endif
+
 namespace rex::system {
 
 XObject::XObject(Type type) : kernel_state_(nullptr), pointer_ref_count_(1), type_(type) {
@@ -213,7 +220,17 @@ X_STATUS XObject::Wait(uint32_t wait_reason, uint32_t processor_mode, uint32_t a
                                 : std::chrono::milliseconds::max();
 
   XThread::CheckTitleTermination();
+#if REX_PLATFORM_PS4
+  const auto wait_start = std::chrono::steady_clock::now();
+#endif
   auto result = rex::thread::Wait(wait_handle, alertable ? true : false, timeout_ms);
+#if REX_PLATFORM_PS4
+  if (ps4_stat_add) {
+    ps4_stat_add(4, uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+                                 std::chrono::steady_clock::now() - wait_start)
+                                 .count()));
+  }
+#endif
   XThread::CheckTitleTermination();
   switch (result) {
     case rex::thread::WaitResult::kSuccess:

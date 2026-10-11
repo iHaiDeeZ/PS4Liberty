@@ -7,6 +7,7 @@
 #include <imgui.h>
 
 #include <rex/filesystem.h>
+#include <rex/platform.h>
 
 namespace gta4::install {
 namespace {
@@ -314,6 +315,20 @@ void InstallDialog::OnDraw(ImGuiIO& io) {
   ImGui::Separator();
   ImGui::Spacing();
 
+#if REX_PLATFORM_PS4
+  // No installer on the PS4: the installed tree is produced once on a PC (Windows/macOS build's
+  // installer: extracted disc, decrypted RPFs, title update) and copied over as-is.
+  ImGui::TextWrapped("GTA IV is not installed.");
+  ImGui::Spacing();
+  ImGui::TextWrapped(
+      "Install the game with the PC version of Liberty Recompiled, then copy its whole "
+      "\"game\" folder (default.xex, default.xexp, update/, common/, xbox360/, ...) to:");
+  ImGui::BulletText("%s", (install_root_ / "game").string().c_str());
+  ImGui::Spacing();
+  ImGui::TextWrapped("Then restart Liberty Recompiled.");
+  ImGui::End();
+  return;
+#endif
   if (state_ == State::kSelecting || state_ == State::kFailed) {
     if (!dlc_only_) {
       ImGui::TextWrapped(

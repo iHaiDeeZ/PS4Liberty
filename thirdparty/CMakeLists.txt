@@ -72,7 +72,12 @@ add_subdirectory("${LIBERTY_RECOMP_THIRDPARTY_ROOT}/msdf-atlas-gen")
 if (NOT (LIBERTY_RECOMP_TARGET_PLATFORM STREQUAL "ps4" OR LIBERTY_RECOMP_TARGET_PLATFORM STREQUAL "switch" OR ANDROID))
     add_subdirectory("${LIBERTY_RECOMP_THIRDPARTY_ROOT}/nativefiledialog-extended")
 endif()
-add_subdirectory("${LIBERTY_RECOMP_THIRDPARTY_ROOT}/o1heap")
+# o1heap 2.x is only used by the pre-RexGlue heap. RexGlue's rexcrt heap needs
+# o1heap 3.x (o1heapReallocate, 4-pointer alignment) and defines the same
+# `o1heap` target only if none exists, so this older copy must not shadow it.
+if (NOT USE_REXGLUE_RUNTIME)
+    add_subdirectory("${LIBERTY_RECOMP_THIRDPARTY_ROOT}/o1heap")
+endif()
 # SDL2 + SDL2_mixer DISABLED — migrated to SDL3 (built in glue/CMakeLists.txt)
 # add_subdirectory("${LIBERTY_RECOMP_THIRDPARTY_ROOT}/SDL")
 # add_subdirectory("${LIBERTY_RECOMP_THIRDPARTY_ROOT}/SDL_mixer")

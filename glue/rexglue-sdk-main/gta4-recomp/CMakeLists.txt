@@ -305,6 +305,114 @@ if(APPLE AND LIBERTY_RECOMP_TARGET_PLATFORM STREQUAL "desktop")
             "$<TARGET_BUNDLE_DIR:LibertyRecomp>" --arch "${CMAKE_OSX_ARCHITECTURES}"
         COMMENT "Verifying macOS runtime closure, architecture, minimum OS, and signature..."
         VERBATIM)
+elseif(PS4)
+    # OpenOrbis PS4 homebrew. Button prompts, font atlases and the RPF key ship
+    # in the package (/app0/Resources, see rex::filesystem::GetResourcesFolder);
+    # the game is installed on the console into /data/LibertyRecomp. Online play
+    # (CURL/OpenSSL community backend), Game Center, the macOS music player and
+    # microphone permission prompts are replaced by PS4 implementations in
+    # src/ps4/.
+    add_executable(LibertyRecomp
+        src/main.cpp
+        src/gta4_app.cpp
+        src/gta4_frontend_hooks.cpp
+        src/gta4_font_selection_trace.cpp
+        src/gta4_presentation_options.cpp
+        src/gta4_presentation_hooks.cpp
+        src/gta4_aspect_hooks.cpp
+        src/gta4_quicksave_hooks.cpp
+        src/gta4_input_hooks.cpp
+        src/gta4_sony_feedback.cpp
+        src/gta4_sony_event_hooks.cpp
+        src/gta4_loading_parallax_fix.cpp
+        src/gta4_motion_bridge.cpp
+        src/gta4_motion_hooks.cpp
+        src/gta4_motion_vehicle_hooks.cpp
+        src/gta4_audio_lifetime_trace.cpp
+        src/gta4_audio_ramped_mix.cpp
+        src/gta4_lzx_hooks.cpp
+        src/gta4_multiplayer_64_hooks.cpp
+        src/gta4_online_hooks.cpp
+        src/gta4_native_hooks.cpp
+        src/gta4_population_hooks.cpp
+        src/gta4_streaming_diagnostics.cpp
+        src/gta4_streaming_hooks.cpp
+        src/gta4_touch_coordinator.cpp
+        src/gta4_transition_hooks.cpp
+        src/install/gta4_install_dialog.cpp
+        src/install/gta4_installer.cpp
+        src/install/gta4_rpf_extractor.cpp
+        src/install/gta4_source_inspector.cpp
+        src/legal_screen_trace.cpp
+        src/rpf_button_prompts.cpp
+        src/input/text_chat_dialog.cpp
+        src/input/context_touch_controls.cpp
+        src/input/context_touch_context.cpp
+        src/input/context_touch_camera_hooks.cpp
+        src/input/context_touch_settings.cpp
+        src/input/context_touch_draw.cpp
+        src/input/context_touch_layout.cpp
+        src/input/context_touch_activity.cpp
+        src/input/context_touch_activity_context.cpp
+        src/input/context_touch_activity_layout.cpp
+        src/input/context_touch_overlay.cpp
+        src/gta4_touch_guest_hooks.cpp
+        src/network/gta4_voice_audio.cpp
+        src/ps4/achievement_bridge_ps4.cpp
+        src/ps4/microphone_permission_ps4.cpp
+        src/ps4/user_music_player_ps4.cpp
+        "${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/crypto/rijndael-alg-fst.c"
+        ${GENERATED_SOURCES}
+    )
+
+    # See the macOS target: keep the straight-line startup registrar at -O0.
+    set_property(SOURCE generated/gta4_register.cpp APPEND PROPERTY COMPILE_OPTIONS
+        "$<$<CONFIG:Release>:-O0>")
+    # Recompiled game code and hooks: inlining limited to inline-hinted functions, like the
+    # Windows RelWithDebInfo build (/Ob1) that runs the game (full inlining crashed in game code).
+    # The SDK libraries (runtime, native renderer) get full -O2 (build-ps4.sh).
+    target_compile_options(LibertyRecomp PRIVATE -finline-hint-functions)
+
+    target_include_directories(LibertyRecomp PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/generated
+        ${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/crypto
+        ${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/imgui
+        ${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/inja/third_party/include
+    )
+    set_property(SOURCE src/gta4_native_hooks.cpp APPEND PROPERTY INCLUDE_DIRECTORIES
+        "${CMAKE_CURRENT_SOURCE_DIR}/../src")
+
+    set_source_files_properties(src/gta4_sony_feedback.cpp src/gta4_sony_event_hooks.cpp
+        PROPERTIES COMPILE_DEFINITIONS GTA4_SONY_PRIMARY_PLAYER_ALIAS)
+
+    target_compile_definitions(LibertyRecomp PRIVATE
+        GTA4_TOUCH_PRIMARY_PLAYER_ALIAS=1
+        GTA4_RECOMP_ASSET_XEX="/data/LibertyRecomp/game/default.xex"
+        GTA4_BUTTON_PROMPT_ASSET_ROOT="/app0/Resources/button_prompts"
+        GTA4_RPF_AES_KEY_SOURCE="/app0/Resources/aes_key.bin"
+    )
+
+    # zlib for the RPF extractor: the PacBrew OpenOrbis portlib (usr/lib/libz.a).
+    find_package(ZLIB REQUIRED)
+
+    target_link_libraries(LibertyRecomp PRIVATE
+        rex::runtime
+        xxHash::xxhash
+        SDL3::SDL3
+        utf8cpp
+        ZLIB::ZLIB
+    )
+
+    rexglue_configure_target(LibertyRecomp GPU_PLUGINS xenos gta4-native)
+
+    set_target_properties(LibertyRecomp PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/LibertyRecomp")
+
+    # cmake/PS4Runtime.cmake (included by the workspace for PS4 builds).
+    ps4_configure_executable(LibertyRecomp)
+    ps4_link_mesa(LibertyRecomp)
+    ps4_add_eboot(LibertyRecomp)
 else()
     add_library(gta4_recomp INTERFACE)
     target_include_directories(gta4_recomp INTERFACE

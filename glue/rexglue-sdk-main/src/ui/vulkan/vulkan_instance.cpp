@@ -29,12 +29,38 @@
 #if REX_PLATFORM_MAC
 #include "vulkan_moltenvk.h"
 #endif
+#if REX_PLATFORM_PS4
+#include "vulkan_wsi_ps4.h"
+#endif
 
 REXCVAR_DEFINE_BOOL(vulkan_log_debug_messages, true, "UI/Vulkan", "Log Vulkan debug messages");
 
 #if REX_PLATFORM_MAC
 REXCVAR_DEFINE_BOOL(vulkan_moltenvk_synchronous_queue_submits, false, "UI/Vulkan",
                     "Process Vulkan queue submissions synchronously in MoltenVK");
+#endif
+
+#if REX_PLATFORM_PS4
+// PS4: Mesa's RADV is linked into the executable (there is no Vulkan loader);
+// this is its ICD entry point, used as vkGetInstanceProcAddr.
+extern "C" VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(VkInstance instance,
+                                                                              const char* name);
+
+namespace {
+// An ICD only returns global commands for a null instance, so vkDestroyInstance
+// is resolved through the instance being destroyed.
+VKAPI_ATTR void VKAPI_CALL Ps4DestroyInstance(VkInstance instance,
+                                              const VkAllocationCallbacks* allocator) {
+  if (instance == VK_NULL_HANDLE) {
+    return;
+  }
+  auto destroy_instance =
+      PFN_vkDestroyInstance(vk_icdGetInstanceProcAddr(instance, "vkDestroyInstance"));
+  if (destroy_instance) {
+    destroy_instance(instance, allocator);
+  }
+}
+}  // namespace
 #endif
 
 namespace rex {
@@ -84,6 +110,10 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
     }
     return nullptr;
   }
+#elif REX_PLATFORM_PS4
+  ifn.vkGetInstanceProcAddr = vk_icdGetInstanceProcAddr;
+  ifn.vkDestroyInstance = Ps4DestroyInstance;
+  loader_loaded = true;
 #else
   loader_loaded = vulkan_instance->loader_.Load(platform::lib_names::kVulkanLoader);
   if (!loader_loaded) {
@@ -92,11 +122,13 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
   }
 #endif
 
+#if !REX_PLATFORM_PS4
 #define XE_VULKAN_LOAD_LOADER_FUNCTION(name) \
   functions_loaded &= (ifn.name = vulkan_instance->loader_.GetSymbol<PFN_##name>(#name)) != nullptr;
   XE_VULKAN_LOAD_LOADER_FUNCTION(vkGetInstanceProcAddr);
   XE_VULKAN_LOAD_LOADER_FUNCTION(vkDestroyInstance);
 #undef XE_VULKAN_LOAD_LOADER_FUNCTION
+#endif
   if (!functions_loaded) {
     REXLOG_ERROR("Failed to get Vulkan loader function pointers");
     return nullptr;
@@ -500,9 +532,18 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
 #include <rex/ui/vulkan/functions/instance_ext_metal_surface.inc>
   }
 #endif
+#if REX_PLATFORM_PS4
+  // RADV has no window system integration on the PS4: VK_KHR_surface comes
+  // from vulkan_wsi_ps4 (VideoOut) instead of the driver.
+  if (with_surface) {
+    vulkan_instance->extensions_.ext_KHR_surface = true;
+    ps4_wsi::InstallInstanceFunctions(ifn);
+  }
+#else
   if (vulkan_instance->extensions_.ext_KHR_surface) {
 #include <rex/ui/vulkan/functions/instance_khr_surface.inc>
   }
+#endif
   if (vulkan_instance->extensions_.ext_EXT_debug_utils) {
 #include <rex/ui/vulkan/functions/instance_ext_debug_utils.inc>
   }

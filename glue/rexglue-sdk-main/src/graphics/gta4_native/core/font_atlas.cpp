@@ -48,7 +48,7 @@ const VectorFontAtlas* FindVectorFontAtlas(VectorFontSet set, size_t atlas_index
   auto& atlas = atlases[index][atlas_index];
   std::call_once(loads[index][atlas_index], [&] {
     atlas.filename = files[index][atlas_index];
-    auto path = rex::filesystem::GetExecutableFolder().parent_path() / "Resources" / "font_atlases" / atlas.filename;
+    auto path = rex::filesystem::GetResourcesFolder() / "font_atlases" / atlas.filename;
     std::error_code error;
     if (!std::filesystem::is_regular_file(path, error)) {
 #ifdef GTA4_NATIVE_FONT_ASSET_ROOT

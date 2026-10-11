@@ -42,6 +42,8 @@
 #endif
 #elif REX_PLATFORM_ANDROID
 #include <rex/ui/surface_android.h>
+#elif REX_PLATFORM_PS4
+#include <rex/ui/surface_ps4.h>
 #elif REX_PLATFORM_GNU_LINUX
 #include <X11/Xlib-xcb.h>
 #include <rex/ui/surface_gnulinux.h>
@@ -501,6 +503,12 @@ std::unique_ptr<Surface> WindowSDL::CreateSurfaceImpl(Surface::TypeFlags allowed
   if (allowed_types & Surface::kTypeFlag_AndroidNativeWindow) {
     auto* native_window = static_cast<ANativeWindow*>(GetNativeWindowHandle());
     if (native_window) return std::make_unique<AndroidNativeWindowSurface>(native_window);
+  }
+#elif REX_PLATFORM_PS4
+  // The SDL window (dummy video driver) only carries events; frames go to
+  // VideoOut.
+  if (allowed_types & Surface::kTypeFlag_PS4VideoOut) {
+    return std::make_unique<PS4VideoOutSurface>();
   }
 #elif REX_PLATFORM_GNU_LINUX
   if (allowed_types & Surface::kTypeFlag_XcbWindow) {

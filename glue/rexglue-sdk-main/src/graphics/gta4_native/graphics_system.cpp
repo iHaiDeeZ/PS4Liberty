@@ -20,6 +20,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -84,6 +85,9 @@
 #include "../shaders/vulkan_spirv/fullscreen_cw_vs.h"
 #include "depth_handoff_ps.h"
 #include "scene_depth_handoff_ps.h"
+#if REX_PLATFORM_PS4
+#include "ps4_empty_ps.h"
+#endif
 #include "packed_depth_alias_ps.h"
 #include "depth_handoff_util.h"
 #include "alpha_to_coverage_util.h"
@@ -263,6 +267,49 @@ REXCVAR_DEFINE_BOOL(gta4_profile_native_detailed_cpu, true, "GTA IV/Diagnostics"
 REXCVAR_DEFINE_UINT32(gta4_profile_native_gpu_query_budget, 512, "GTA IV/Diagnostics",
                       "Maximum timestamp boundaries per sampled frame (more boundaries add GPU overhead)")
     .range(16, rex::graphics::gta4_native::performance::kMaximumGpuQueriesPerFrame);
+// The game redraws the city into its shadow cascades every frame: ~56% of all draws in gameplay
+// (~2800 of ~5000), each costing the render worker as much CPU as a scene draw. On a slow CPU the
+// cascades can be redrawn every N frames instead; between updates the shadow maps keep the last
+// frame's contents (a slight lag of shadows behind fast movement). 0 = never redraw them.
+#if REX_PLATFORM_PS4
+#define GTA4_NATIVE_SHADOW_INTERVAL_DEFAULT 2
+#else
+#define GTA4_NATIVE_SHADOW_INTERVAL_DEFAULT 1
+#endif
+REXCVAR_DEFINE_UINT32(gta4_native_shadow_update_interval, GTA4_NATIVE_SHADOW_INTERVAL_DEFAULT,
+                      "GTA IV/Graphics",
+                      "Redraw the shadow cascades every N frames (1 = every frame, 0 = never)")
+    .range(0, 8);
+// Likewise for the reflection passes (water, environment, interior, mirror): their textures keep
+// the last update between redraws. Updated on the frames between shadow updates, so the two
+// costs alternate instead of landing on the same frame.
+REXCVAR_DEFINE_UINT32(gta4_native_reflection_update_interval, GTA4_NATIVE_SHADOW_INTERVAL_DEFAULT,
+                      "GTA IV/Graphics",
+                      "Redraw the reflection passes every N frames (1 = every frame, 0 = never)")
+    .range(0, 8);
+namespace {
+// Frames published so far (render worker), for the update intervals above.
+uint64_t g_shadow_frame_counter = 0;
+// Retail phases (native_performance_samples.cpp PerformanceRangeForRetailPhase).
+constexpr uint32_t kRetailPhaseWarpShadow = 21;
+constexpr bool IsRetailReflectionPhase(uint32_t phase) {
+  return phase == 17 || phase == 19 || phase == 20 || phase == 36;  // water, env, interior, mirror
+}
+bool SkipPhaseThisFrame(uint32_t interval, uint64_t frame) {
+  return interval != 1 && (interval == 0 || frame % interval != 0);
+}
+// Whether this frame leaves a command's pass out (gta4_native_*_update_interval).
+bool DropForUpdateInterval(const rex::graphics::gta4_native::GpuPassOrigin& origin) {
+  if (!origin.attributed()) return false;
+  if (origin.retail_phase == kRetailPhaseWarpShadow)
+    return SkipPhaseThisFrame(REXCVAR_GET(gta4_native_shadow_update_interval),
+                              g_shadow_frame_counter);
+  if (IsRetailReflectionPhase(origin.retail_phase))
+    return SkipPhaseThisFrame(REXCVAR_GET(gta4_native_reflection_update_interval),
+                              g_shadow_frame_counter + 1);
+  return false;
+}
+}  // namespace
 REXCVAR_DEFINE_UINT32(gta4_profile_native_interval, 1, "GTA IV/Diagnostics",
                       "Capture one native-renderer profile after this many submitted frames")
     .range(1, 3600);
@@ -306,6 +353,16 @@ static std::atomic<bool> g_native_memory_profile_stop_requested{false};
 static std::atomic<uint32_t> g_native_memory_profile_marker_requested{0};
 static std::atomic<bool> g_native_memory_profile_deep_active{false};
 static std::atomic<uint32_t> g_native_memory_profile_event_frame{0};
+
+#if REX_PLATFORM_PS4
+// Activity counters (os/ps4/runtime/ps4_stackdump.cpp): 6 frames rendered + their CPU time (us),
+// 7 frames whose rendering failed, 12 commands dropped per frame (update intervals), 13 draws
+// kept per frame, 14 render worker time waiting for the game's commands (us).
+extern "C" __attribute__((weak)) void ps4_stat_add(int id, uint64_t value);
+namespace {
+uint64_t g_ps4_frame_dropped = 0, g_ps4_frame_draws = 0;  // render worker only
+}
+#endif
 
 extern "C" __attribute__((visibility("default"))) int rex_gta4_native_profile_start() {
   g_native_profile_capture_requested.store(true, std::memory_order_release);
@@ -5572,8 +5629,18 @@ void Gta4NativeGraphicsSystem::RenderWorkerMain() {
       worker_command_batch_.clear();
       worker_command_cursor_ = 0;
       std::unique_lock lock(render_mutex_);
+#if REX_PLATFORM_PS4
+      const auto ps4_idle_start = std::chrono::steady_clock::now();
+#endif
       render_condition_.wait(
           lock, [this]() { return !render_worker_running_ || !render_queue_.empty(); });
+#if REX_PLATFORM_PS4
+      if (ps4_stat_add) {
+        ps4_stat_add(14, uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+                                      std::chrono::steady_clock::now() - ps4_idle_start)
+                                      .count()));
+      }
+#endif
       if (render_queue_.empty()) {
         if (!render_worker_running_) break;
         continue;
@@ -6000,20 +6067,38 @@ void Gta4NativeGraphicsSystem::RenderWorkerMain() {
                   ? 1u
                   : 0u;
         }
+        // Passes this frame doesn't redraw (shadow / reflection update intervals): dropped once
+        // their constant deltas are applied, so the commands that follow see the same state;
+        // the rest of their intake and all of their recording is skipped.
+        const bool drop_for_interval = DropForUpdateInterval(command.gpu_pass_origin);
         if (command.type == CommandType::kDrawPrimitive ||
             command.type == CommandType::kDrawPrimitiveUp ||
             command.type == CommandType::kDrawIndexedPrimitive ||
             command.type == CommandType::kClear) {
-          command.recorded_fixed_function_state_hash =
-              HashFixedFunctionState(command.fixed_function_state);
           const uint32_t device = CommandDevice(command.type, command.bytes.data());
           if (!ApplyShaderConstantDelta(command, device)) {
             REXLOG_ERROR("gta4-native-constants: rejected worker command type={} device={:08X}",
                          CommandTypeName(command.type), device);
             break;
           }
+          if (drop_for_interval) {
+#if REX_PLATFORM_PS4
+            ++g_ps4_frame_dropped;
+#endif
+            startup_present_follows_texture_lock_flush = false;
+            break;
+          }
+          command.recorded_fixed_function_state_hash =
+              HashFixedFunctionState(command.fixed_function_state);
           command.pipeline_state = SnapshotPipeline(command, true);
         } else {
+          if (drop_for_interval) {
+#if REX_PLATFORM_PS4
+            ++g_ps4_frame_dropped;
+#endif
+            startup_present_follows_texture_lock_flush = false;
+            break;
+          }
           command.pipeline_state = SnapshotPipeline(command, false);
         }
         if (command.render_phase == RenderPhase::kCompositePostFx &&
@@ -6032,6 +6117,9 @@ void Gta4NativeGraphicsSystem::RenderWorkerMain() {
             command.type == CommandType::kDrawPrimitiveUp ||
             command.type == CommandType::kDrawIndexedPrimitive) {
           TryPrewarmDrawPipeline(command);
+#if REX_PLATFORM_PS4
+          ++g_ps4_frame_draws;
+#endif
         }
         if (command.phone_trace) TracePhoneNativeCommand("worker-finalized", command);
         AddProtectedTextureGenerations(command, frame_texture_protection_);
@@ -15045,6 +15133,7 @@ bool Gta4NativeGraphicsSystem::EnsureFrameUploadCapacity(
   };
 
   std::unordered_set<uint64_t> pending_texture_generations;
+  pending_texture_generations.reserve(256);
   auto add_texture = [&](const std::shared_ptr<const NativeTextureResource>& texture) {
     if (!texture || texture->gpu_produced || texture->payload.empty() ||
         native_texture_images_.contains(texture->generation) ||
@@ -15057,8 +15146,23 @@ bool Gta4NativeGraphicsSystem::EnsureFrameUploadCapacity(
 
   using VertexUploadKey =
       std::tuple<const NativeBufferResource*, uint64_t, uint64_t, uint32_t, uint32_t, uint32_t>;
-  std::set<VertexUploadKey> pending_vertex_uploads;
-  std::set<std::pair<const NativeBufferResource*, bool>> pending_index_uploads;
+  // Upload candidates are collected flat and de-duplicated once after the walk (sort + unique):
+  // ~5000 draws per gameplay frame made the per-draw std::set inserts (one heap node each) a
+  // large part of this pass on the PS4's CPU. The result is the same set of unique uploads.
+  struct PendingVertexUpload {
+    VertexUploadKey key;
+    uint64_t generation;
+    VkDeviceSize size;
+  };
+  struct PendingIndexUpload {
+    std::pair<const NativeBufferResource*, bool> key;
+    uint64_t generation;
+    VkDeviceSize size;
+  };
+  thread_local std::vector<PendingVertexUpload> pending_vertex_uploads;
+  thread_local std::vector<PendingIndexUpload> pending_index_uploads;
+  pending_vertex_uploads.clear();
+  pending_index_uploads.clear();
   const bool persistent_buffers_enabled = REXCVAR_GET(gta4_native_persistent_buffers);
   const bool persistent_direct_upload =
       persistent_buffers_enabled && vulkan_device->properties().driverID == VK_DRIVER_ID_MOLTENVK;
@@ -15129,37 +15233,18 @@ bool Gta4NativeGraphicsSystem::EnsureFrameUploadCapacity(
       if (!resource || resource->payload.empty() || !stream_state.stride) {
         continue;
       }
-      VertexUploadKey key{resource.get(), declaration_hash,    shader_hash,
-                          stream,         stream_state.offset, stream_state.stride};
-      if (pending_vertex_uploads.insert(key).second) {
-        NativePersistentBufferKey persistent_key{};
-        persistent_key.generation = resource->generation;
-        persistent_key.declaration_hash = declaration_hash;
-        persistent_key.shader_hash = shader_hash;
-        persistent_key.stream = stream;
-        persistent_key.stream_offset = stream_state.offset;
-        persistent_key.stride = stream_state.stride;
-        persistent_key.kind = NativePersistentBufferKind::kVertex;
-        if (!persistent_buffers_enabled ||
-            (!persistent_direct_upload && !persistent_buffers_.contains(persistent_key))) {
-          add_allocation(VkDeviceSize(resource->payload.size()), kNativePersistentBufferAlignment);
-        }
-      }
+      pending_vertex_uploads.push_back(
+          {VertexUploadKey{resource.get(), declaration_hash, shader_hash, stream,
+                           stream_state.offset, stream_state.stride},
+           resource->generation, VkDeviceSize(resource->payload.size())});
     }
 
     if (command.type == CommandType::kDrawIndexedPrimitive && command.index_buffer) {
       const bool index32 = (command.index_buffer->flags & kIndex32Flag) != 0;
-      if (!persistent_direct_upload &&
-          pending_index_uploads.insert({command.index_buffer.get(), index32}).second) {
-        NativePersistentBufferKey persistent_key{};
-        persistent_key.generation = command.index_buffer->generation;
-        persistent_key.kind =
-            index32 ? NativePersistentBufferKind::kIndex32 : NativePersistentBufferKind::kIndex16;
-        if (!persistent_buffers_enabled ||
-            (!persistent_direct_upload && !persistent_buffers_.contains(persistent_key))) {
-          add_allocation(VkDeviceSize(command.index_buffer->payload.size()),
-                         kNativePersistentBufferAlignment);
-        }
+      if (!persistent_direct_upload) {
+        pending_index_uploads.push_back({{command.index_buffer.get(), index32},
+                                         command.index_buffer->generation,
+                                         VkDeviceSize(command.index_buffer->payload.size())});
       }
       DrawIndexedPrimitiveCommand draw{};
       if (command.bytes.size() >= sizeof(draw)) {
@@ -15171,6 +15256,48 @@ bool Gta4NativeGraphicsSystem::EnsureFrameUploadCapacity(
           add_allocation(VkDeviceSize(draw.index_count) * sizeof(uint32_t), alignof(uint32_t));
         }
       }
+    }
+  }
+
+  // Unique uploads, in key order (as the std::set walk produced them).
+  std::sort(pending_vertex_uploads.begin(), pending_vertex_uploads.end(),
+            [](const PendingVertexUpload& a, const PendingVertexUpload& b) { return a.key < b.key; });
+  pending_vertex_uploads.erase(
+      std::unique(pending_vertex_uploads.begin(), pending_vertex_uploads.end(),
+                  [](const PendingVertexUpload& a, const PendingVertexUpload& b) {
+                    return a.key == b.key;
+                  }),
+      pending_vertex_uploads.end());
+  for (const PendingVertexUpload& upload : pending_vertex_uploads) {
+    NativePersistentBufferKey persistent_key{};
+    persistent_key.generation = upload.generation;
+    persistent_key.declaration_hash = std::get<1>(upload.key);
+    persistent_key.shader_hash = std::get<2>(upload.key);
+    persistent_key.stream = std::get<3>(upload.key);
+    persistent_key.stream_offset = std::get<4>(upload.key);
+    persistent_key.stride = std::get<5>(upload.key);
+    persistent_key.kind = NativePersistentBufferKind::kVertex;
+    if (!persistent_buffers_enabled ||
+        (!persistent_direct_upload && !persistent_buffers_.contains(persistent_key))) {
+      add_allocation(upload.size, kNativePersistentBufferAlignment);
+    }
+  }
+  std::sort(pending_index_uploads.begin(), pending_index_uploads.end(),
+            [](const PendingIndexUpload& a, const PendingIndexUpload& b) { return a.key < b.key; });
+  pending_index_uploads.erase(
+      std::unique(pending_index_uploads.begin(), pending_index_uploads.end(),
+                  [](const PendingIndexUpload& a, const PendingIndexUpload& b) {
+                    return a.key == b.key;
+                  }),
+      pending_index_uploads.end());
+  for (const PendingIndexUpload& upload : pending_index_uploads) {
+    NativePersistentBufferKey persistent_key{};
+    persistent_key.generation = upload.generation;
+    persistent_key.kind = upload.key.second ? NativePersistentBufferKind::kIndex32
+                                            : NativePersistentBufferKind::kIndex16;
+    if (!persistent_buffers_enabled ||
+        (!persistent_direct_upload && !persistent_buffers_.contains(persistent_key))) {
+      add_allocation(upload.size, kNativePersistentBufferAlignment);
     }
   }
 
@@ -18705,6 +18832,18 @@ VkPipeline Gta4NativeGraphicsSystem::GetOrCreatePipeline(
       return reject("temporal-shader-variant-unavailable");
     }
   }
+#if REX_PLATFORM_PS4
+  // PS4 GPU-hang isolation (/data/LibertyRecomp/env.txt): REX_PS4_SKIP_DEPTH_ONLY=1 drops draws
+  // that have no pixel shader (shadow maps); REX_PS4_DEPTH_ONLY_PS=1 gives them an empty one
+  // instead of the driver's built-in no-op pixel shader.
+  static const bool ps4_skip_depth_only = [] {
+    const char* value = std::getenv("REX_PS4_SKIP_DEPTH_ONLY");
+    return value && value[0] == '1';
+  }();
+  if (ps4_skip_depth_only && depth_only_without_pixel_shader) {
+    return reject("ps4-depth-only-skipped");
+  }
+#endif
   if (!state.vertex_shader_resource || !selected_vertex.early_module ||
       (!state.pixel_shader_resource && !depth_only_without_pixel_shader) ||
       (state.pixel_shader_resource && !selected_pixel.early_module) ||
@@ -19352,6 +19491,23 @@ VkPipeline Gta4NativeGraphicsSystem::GetOrCreatePipeline(
     }
     shader_stage_count = 2;
   }
+#if REX_PLATFORM_PS4
+  static const bool ps4_depth_only_ps = [] {
+    const char* value = std::getenv("REX_PS4_DEPTH_ONLY_PS");
+    return value && value[0] == '1';
+  }();
+  if (ps4_depth_only_ps && shader_stage_count == 1) {
+    static const VkShaderModule empty_ps = ui::vulkan::util::CreateShaderModule(
+        vulkan_device, gta4_native_ps4_empty_ps, sizeof(gta4_native_ps4_empty_ps));
+    if (empty_ps) {
+      shader_stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+      shader_stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+      shader_stages[1].module = empty_ps;
+      shader_stages[1].pName = "main";
+      shader_stage_count = 2;
+    }
+  }
+#endif
 
   VkPipelineRenderingCreateInfo rendering_info{};
   rendering_info.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
@@ -32507,6 +32663,7 @@ bool Gta4NativeGraphicsSystem::PublishFrame(
     const PresentCommand& present,
     const std::shared_ptr<const NativeTextureResource>& present_source,
     const std::shared_ptr<const EnvironmentalDataV2>& environmental_data) {
+  ++g_shadow_frame_counter;
   const bool detail_requested = rex::diagnostics::IsEnabled(rex::diagnostics::Category::kNativeProfiler) &&
       !native_gpu_profile_state_.capture_complete && !native_gpu_profile_state_.export_started &&
       (REXCVAR_GET(gta4_profile_native_autostart) || native_gpu_profile_state_.capture_armed ||
@@ -32636,8 +32793,22 @@ bool Gta4NativeGraphicsSystem::PublishFrame(
         environmental_data ? environmental_data->source_sequence : 0,
         environmental_data ? environmental_data->valid_fields : 0);
   }
+#if REX_PLATFORM_PS4
+  const auto ps4_frame_start = std::chrono::steady_clock::now();
+#endif
   const bool result = ClearGuestOutput(width, height, display_width, display_height, present,
                                        present_source, environmental_data);
+#if REX_PLATFORM_PS4
+  if (ps4_stat_add) {
+    ps4_stat_add(result ? 6 : 7, uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+                                              std::chrono::steady_clock::now() - ps4_frame_start)
+                                              .count()));
+    ps4_stat_add(12, g_ps4_frame_dropped);
+    ps4_stat_add(13, g_ps4_frame_draws);
+  }
+  g_ps4_frame_dropped = 0;
+  g_ps4_frame_draws = 0;
+#endif
   if (present.diagnostic_trace) {
     REXLOG_INFO(
         "gta4-tv-publish-result: session={} present={} frame={} origin={} caller={:08X} "
